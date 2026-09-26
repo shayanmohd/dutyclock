@@ -1,0 +1,15 @@
+{
+  "background": ["#C6E62A", "#9CCB14"],
+  "text": "#1D2529",
+  "frame": "#1D2529",
+  "font": "fonts/plex_condensed_bold.ttf",
+  "weight": 700,
+  "shots": [
+    { "src": "screenshots-raw/01-today.png", "out": "screenshots/01-today.png", "caption": "Every limit on one dial" },
+    { "src": "screenshots-raw/02-split.png", "out": "screenshots/02-split.png", "caption": "15 then 30 resets your 4.5 hours" },
+    { "src": "screenshots-raw/03-records.png", "out": "screenshots/03-records.png", "caption": "Print a 28-day record" },
+    { "src": "screenshots-raw/04-week.png", "out": "screenshots/04-week.png", "caption": "Compensation owed and its deadline" },
+    { "src": "screenshots-raw/05-plan.png", "out": "screenshots/05-plan.png", "caption": "Can I make it home?" },
+    { "src": "screenshots-raw/06-night.png", "out": "screenshots/06-night.png", "caption": "For the cab at night" }
+  ]
+}

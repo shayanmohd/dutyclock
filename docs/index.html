@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dutyclock: drivers' hours countdowns for EU and UK rules</title>
+<meta name="description" content="A one-time, offline countdown of the drivers' hours you owe under EU 561/2006, AETR, the van rules, GB domestic rules and working time. Advisory, not a tachograph.">
+<style>
+  @font-face { font-family: "Plex Cond"; src: url("fonts/plex_condensed_semibold.ttf"); font-weight: 600; font-display: swap; }
+  @font-face { font-family: "Plex Cond"; src: url("fonts/plex_condensed_bold.ttf"); font-weight: 700; font-display: swap; }
+  @font-face { font-family: "Red Hat Text"; src: url("fonts/red_hat_text_regular.ttf"); font-weight: 400; font-display: swap; }
+  @font-face { font-family: "Red Hat Text"; src: url("fonts/red_hat_text_medium.ttf"); font-weight: 500; font-display: swap; }
+
+  :root {
+    --kerb: #ECEFEA; --signboard: #F8F9F5; --tarmac: #1D2529; --slate: #55616A;
+    --hivis: #B9D839; --rule: #D2D8D1; --plate: #1D2529; --plate-ink: #ECEFEA;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --kerb: #1F272B; --signboard: #2A3439; --tarmac: #E8ECE6; --slate: #A3AEB4; --rule: #3A464C; --plate: #2A3439; --plate-ink: #E8ECE6; }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--kerb); color: var(--tarmac);
+    font: 400 17px/1.55 "Red Hat Text", system-ui, sans-serif;
+  }
+  h1, h2, h3, .num { font-family: "Plex Cond", "Arial Narrow", sans-serif; font-weight: 700; line-height: 1.05; margin: 0; }
+  a { color: inherit; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 20px; }
+  :focus-visible { outline: 3px solid var(--hivis); outline-offset: 3px; }
+
+  header.top { padding: 20px 0; }
+  header.top .wrap { display: flex; align-items: center; gap: 12px; }
+  header.top svg { width: 36px; height: 36px; }
+  header.top b { font-family: "Plex Cond", sans-serif; font-size: 22px; }
+
+  .hero { padding: 28px 0 64px; }
+  .hero .wrap { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 48px; align-items: center; }
+  .hero h1 { font-size: clamp(44px, 6vw, 72px); letter-spacing: -0.5px; max-width: 12ch; }
+  .hero p { font-size: 20px; color: var(--slate); max-width: 46ch; margin: 20px 0 28px; }
+  .cta {
+    display: inline-block; background: var(--hivis); color: #1D2529; text-decoration: none;
+    font: 600 19px/1 "Plex Cond", sans-serif; padding: 17px 26px; border-radius: 8px;
+  }
+  .cta:active { transform: translateY(1px); }
+  .phone { justify-self: center; width: min(340px, 100%); }
+  .phone img { width: 100%; height: auto; display: block; border-radius: 16px; border: 1px solid var(--rule); }
+
+  .plate { background: var(--plate); color: var(--plate-ink); padding: 72px 0; }
+  .plate .wrap { display: grid; grid-template-columns: 0.8fr 1.2fr; gap: 48px; align-items: center; }
+  .plate h2 { font-size: clamp(34px, 4.4vw, 52px); }
+  .plate p { font-size: 18px; max-width: 52ch; opacity: 0.92; }
+  .plate img { width: 100%; max-width: 360px; border-radius: 16px; display: block; }
+
+  .counts { padding: 72px 0 40px; }
+  .counts h2 { font-size: clamp(30px, 3.6vw, 44px); margin-bottom: 28px; }
+  .cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0 40px; }
+  .cols h3 { font-size: 22px; padding: 14px 0 6px; border-top: 3px solid var(--tarmac); }
+  .cols ul { margin: 0; padding: 0 0 24px; list-style: none; }
+  .cols li { padding: 7px 0; border-bottom: 1px solid var(--rule); }
+
+  .shots { padding: 32px 0 72px; }
+  .strip { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(220px, 260px); gap: 20px; overflow-x: auto; padding-bottom: 12px; scroll-snap-type: x mandatory; }
+  .strip figure { margin: 0; scroll-snap-align: start; }
+  .strip img { width: 100%; height: auto; border-radius: 12px; display: block; border: 1px solid var(--rule); }
+
+  .price { background: var(--signboard); border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); padding: 64px 0; }
+  .price .wrap { display: grid; grid-template-columns: auto 1fr; gap: 40px; align-items: baseline; }
+  .price .num { font-size: clamp(56px, 8vw, 96px); }
+  .price p { font-size: 20px; margin: 0; max-width: 50ch; }
+
+  footer { padding: 40px 0 56px; color: var(--slate); font-size: 15px; }
+  footer p { max-width: 70ch; }
+
+  @media (max-width: 760px) {
+    .hero .wrap, .plate .wrap, .price .wrap { grid-template-columns: 1fr; gap: 28px; }
+    .cols { grid-template-columns: 1fr; }
+    .hero { padding-top: 8px; }
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <svg viewBox="18 18 72 72" aria-hidden="true"><rect x="18" y="18" width="72" height="72" rx="16" fill="#B9D839"/><path d="M54 54 L54 25 A29 29 0 0 1 83 54 Z" fill="#1D2529"/><circle cx="54" cy="54" r="25.5" fill="none" stroke="#1D2529" stroke-width="7"/><path d="M28.5 55.5 L47 53.5 L47 60 L29 60.5 Z M79.5 55.5 L61 53.5 L61 60 L79 60.5 Z M50.5 60 L57.5 60 L58 79.5 L50 79.5 Z" fill="#1D2529"/><circle cx="54" cy="56" r="8" fill="#1D2529"/></svg>
+    <b>Dutyclock</b>
+  </div>
+</header>
+
+<main>
+  <section class="hero">
+    <div class="wrap">
+      <div>
+        <h1>The drivers' hours you owe, counted down.</h1>
+        <p>EU 561/2006, AETR, van and GB domestic countdowns, plus working time. One price, fully offline.</p>
+        <a class="cta" href="https://play.google.com/store/apps/details?id=com.mohdshayan.dutyclock">Get it on Google Play</a>
+      </div>
+      <div class="phone"><img src="shots/01-today.png" alt="Dutyclock's Today screen: the Day Disc showing driving left before a break, with the limits listed below"></div>
+    </div>
+  </section>
+
+  <section class="plate">
+    <div class="wrap">
+      <img src="shots/06-night.png" alt="The Day Disc at night in dark mode">
+      <div>
+        <h2>The tachograph chart, redrawn as a live instrument.</h2>
+        <p>Midnight at the top, the day running clockwise. Driving draws the thickest band, other work a thinner one, availability the thinnest, rest nothing at all. The stretch you are in now is lit, and the most urgent limit counts down in the middle.</p>
+        <p>Tap the mode you are in, the same four your tachograph uses. Missed a tap? Move, split or delete any entry and every limit recalculates.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="counts">
+    <div class="wrap">
+      <h2>What it counts</h2>
+      <div class="cols">
+        <div>
+          <h3>Driving</h3>
+          <ul>
+            <li>4.5 hours, then 45 minutes or 15 then 30</li>
+            <li>9-hour days, and your two 10-hour days</li>
+            <li>56 hours a week, 90 over two</li>
+            <li>GB domestic: 10 hours driving, 11 on duty</li>
+          </ul>
+        </div>
+        <div>
+          <h3>Rest</h3>
+          <ul>
+            <li>Daily rest: 11, reduced 9, or 3 then 9</li>
+            <li>The latest time your rest must start</li>
+            <li>Weekly rest: 45, or reduced 24</li>
+            <li>Compensation owed, with its deadline</li>
+          </ul>
+        </div>
+        <div>
+          <h3>Working time</h3>
+          <ul>
+            <li>A break after 6 hours of work</li>
+            <li>30 or 45 minutes by hours worked</li>
+            <li>60 hours in a week</li>
+            <li>The 48-hour average, leave credited</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="shots" aria-label="Screenshots">
+    <div class="wrap">
+      <div class="strip">
+        <figure><img src="shots/02-split.png" alt="Split break complete: 15 then 30 minutes, and the 4.5-hour driving clock starts again" loading="lazy"></figure>
+        <figure><img src="shots/03-records.png" alt="The Records screen with the 28-day PDF preview" loading="lazy"></figure>
+        <figure><img src="shots/04-week.png" alt="The Week screen with weekly totals and the compensation owed after a reduced weekly rest" loading="lazy"></figure>
+        <figure><img src="shots/05-plan.png" alt="The planner showing arrival time" loading="lazy"></figure>
+      </div>
+    </div>
+  </section>
+
+  <section class="price">
+    <div class="wrap">
+      <div class="num">USD 4.99</div>
+      <p>Paid once, in local currency where you buy it. No ads, no subscription, no account. Works fully offline: no location, no sign-in, nothing leaves your phone.</p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>Dutyclock is an advisory planner for your own use. It is not a tachograph, not an ELD and not a legal record, and it does not replace your tachograph or operator records. Check it only when parked. Not affiliated with DVSA, the Department for Transport, the European Commission or any government body.</p>
+    <p><a href="privacy-policy.html">Privacy policy</a>. Published by SocialSure Private Limited.</p>
+  </div>
+</footer>
+</body>
+</html>
