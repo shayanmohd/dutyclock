@@ -19,7 +19,7 @@ Drivers' hours countdowns for EU 561/2006, AETR and GB domestic rules: break due
 Split breaks count properly: 15 minutes then 30 minutes resets your 4.5-hour clock, and every break start time can be edited afterwards.
 Working time too: RTD breaks after 6 and 9 hours, the 60-hour week and your 48-hour average, with a printable 28-day record.
 
-Tap the mode you are in, the same four your tachograph uses: driving, other work, availability, break or rest. Every limit counts down on one screen, and the next one to run out counts down in a notification, and an alert sounds before a break is due or a rest must start.
+Tap the mode you are in, the same four your tachograph uses: driving, other work, availability, break or rest. Every limit counts down on one screen, the next one to run out counts down in a notification, and an alert sounds before a break is due or a rest must start.
 
 What it tracks
 - 4.5 hours driving, then 45 minutes or a 15 plus 30 split
