@@ -50,18 +50,18 @@ object Fmt {
     }
 }
 
-/**
- * Reads what a driver types for a duration: "3:40", "3.40", "3" (hours) or "0:45". Minutes take
- * two digits, so "3.4" is refused rather than guessed as 3:04, 3:24 or 3:40.
- */
+/** Durations as the driver enters them: separate hours and minutes boxes, digits only. */
 object Durations {
-    private val re = Regex("""^\s*(\d{1,3})(?:[:.,](\d{2}))?\s*$""")
-
-    fun parse(s: String): Long? {
-        val m = re.matchEntire(s) ?: return null
-        val h = m.groupValues[1].toLong()
-        val min = m.groupValues[2].takeIf { it.isNotEmpty() }?.toLong() ?: 0L
-        if (min >= 60) return null
-        return (h * 60 + min) * MINUTE_MS
+    /**
+     * Separate hours and minutes boxes, digits only, so no keyboard needs a decimal key. A blank box
+     * is zero; minutes go up to 59; anything else is refused.
+     */
+    fun ofParts(hours: String, minutes: String): Long? {
+        val h = hours.trim().ifEmpty { "0" }
+        val min = minutes.trim().ifEmpty { "0" }
+        if (!h.all(Char::isDigit) || !min.all(Char::isDigit) || h.length > 4 || min.length > 2) return null
+        val mv = min.toLong()
+        if (mv >= 60) return null
+        return (h.toLong() * 60 + mv) * MINUTE_MS
     }
 }

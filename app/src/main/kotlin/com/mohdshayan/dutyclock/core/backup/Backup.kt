@@ -1,6 +1,7 @@
 package com.mohdshayan.dutyclock.core.backup
 
 import com.mohdshayan.dutyclock.core.model.Absence
+import com.mohdshayan.dutyclock.core.model.DAY_MS
 import com.mohdshayan.dutyclock.core.model.Seed
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
@@ -69,6 +70,9 @@ object Backup {
             )
             if (minutes.any { it !in 0..MAX_SEED_MIN } || s.seededAtUtc !in EARLIEST..LATEST) throw NotABackup("seed")
             if (s.tenHourDaysUsed !in 0..2 || s.reducedDailyRestsUsed !in 0..3) throw NotABackup("seed")
+            if (s.otherWorkSinceRestMin !in 0..24 * 60) throw NotABackup("seed")
+            // The sheet and the Log editor never put the reading before the start of counting, or more than 7 days after it.
+            s.readAtUtc?.let { r -> if (r !in EARLIEST..LATEST || r < s.seededAtUtc || r - s.seededAtUtc > 7 * DAY_MS) throw NotABackup("seed") }
         }
         return file
     }

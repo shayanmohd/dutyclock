@@ -7,7 +7,10 @@ import com.mohdshayan.dutyclock.alerts.AlertScheduler
 import com.mohdshayan.dutyclock.core.backup.Backup
 import com.mohdshayan.dutyclock.core.backup.BackupEntry
 import com.mohdshayan.dutyclock.core.backup.BackupFile
+import com.mohdshayan.dutyclock.core.engine.EditImpact
 import com.mohdshayan.dutyclock.core.engine.EngineInput
+import com.mohdshayan.dutyclock.core.engine.Fmt
+import com.mohdshayan.dutyclock.core.engine.Setup
 import com.mohdshayan.dutyclock.core.model.Absence
 import com.mohdshayan.dutyclock.core.model.AbsenceKind
 import com.mohdshayan.dutyclock.core.model.Entry
@@ -78,43 +81,69 @@ class LogRepository(
 
     suspend fun entry(id: Long): ActivityEntry? = entryDao.byId(id)
 
+    /**
+     * What an edit does to the start of counting (Setup.editImpact), applied in the same
+     * transaction: a reanchor moves the seed's start, an edit that would exceed the reading is
+     * refused, anything else writes the entry only.
+     */
+    private suspend fun impact(all: List<ActivityEntry>, editedId: Long?, start: Long, mode: Mode): EditImpact {
+        val seed = seedDao.get()?.toCore()
+        val impact = Setup.editImpact(seed, all.map { it.toCore() }, editedId, start, mode)
+        if (impact is EditImpact.Exceeds) {
+            throw EditRefused(
+                "That puts more driving or work before ${Fmt.when_(impact.readAt, System.currentTimeMillis(), ZoneId.systemDefault())} than the numbers you brought in. Pick another time, or bring your week in again.",
+            )
+        }
+        if (impact is EditImpact.Reanchor && seed != null) seedDao.upsert(Setup.reanchor(seed, impact.to).toRow())
+        return impact
+    }
+
     /** Moves or re-modes an entry. Refuses a start that would jump over its neighbours. */
-    suspend fun saveEdit(id: Long, start: Long, mode: Mode, now: Long = System.currentTimeMillis()) {
-        val all = entryDao.all()
-        val i = all.indexOfFirst { it.id == id }
-        if (i < 0) throw EditRefused("That entry no longer exists.")
-        if (start > now) throw EditRefused("That start is in the future. Pick a time up to now.")
-        val next = all.getOrNull(i + 1)
-        val prev = all.getOrNull(i - 1)
-        if (next != null && start >= next.startUtc) throw EditRefused("That start overlaps the next entry. Pick an earlier time.")
-        if (prev != null && start <= prev.startUtc) throw EditRefused("That start overlaps the entry before. Pick a later time.")
-        val old = all[i]
-        entryDao.update(old.copy(startUtc = start, mode = mode.name, source = if (old.source == "IMPORT") "IMPORT" else "EDIT", editedAt = now))
+    suspend fun saveEdit(id: Long, start: Long, mode: Mode, now: Long = System.currentTimeMillis()): EditImpact {
+        val impact = db.withTransaction {
+            val all = entryDao.all()
+            val i = all.indexOfFirst { it.id == id }
+            if (i < 0) throw EditRefused("That entry no longer exists.")
+            if (start > now) throw EditRefused("That start is in the future. Pick a time up to now.")
+            val next = all.getOrNull(i + 1)
+            val prev = all.getOrNull(i - 1)
+            if (next != null && start >= next.startUtc) throw EditRefused("That start overlaps the next entry. Pick an earlier time.")
+            if (prev != null && start <= prev.startUtc) throw EditRefused("That start overlaps the entry before. Pick a later time.")
+            val impact = impact(all, id, start, mode)
+            val old = all[i]
+            entryDao.update(old.copy(startUtc = start, mode = mode.name, source = if (old.source == "IMPORT") "IMPORT" else "EDIT", editedAt = now))
+            impact
+        }
         afterWrite()
+        return impact
     }
 
     /** Adds an entry at any past minute; it splits whatever stretch it lands in. */
-    suspend fun add(start: Long, mode: Mode, now: Long = System.currentTimeMillis()): Long {
+    suspend fun add(start: Long, mode: Mode, now: Long = System.currentTimeMillis()): EditImpact {
         if (start > now) throw EditRefused("That start is in the future. Pick a time up to now.")
-        if (entryDao.countAt(start) > 0) throw EditRefused("Another entry starts at that minute. Pick another time.")
         val ruleSet = prefs.current().ruleSet
-        val id = try {
-            entryDao.insert(ActivityEntry(startUtc = start, mode = mode.name, ruleSet = ruleSet.name, source = "EDIT", createdAt = now, editedAt = now))
-        } catch (e: SQLiteConstraintException) {
-            throw EditRefused("Another entry starts at that minute. Pick another time.")
+        val impact = db.withTransaction {
+            if (entryDao.countAt(start) > 0) throw EditRefused("Another entry starts at that minute. Pick another time.")
+            val impact = impact(entryDao.all(), null, start, mode)
+            try {
+                entryDao.insert(ActivityEntry(startUtc = start, mode = mode.name, ruleSet = ruleSet.name, source = "EDIT", createdAt = now, editedAt = now))
+            } catch (e: SQLiteConstraintException) {
+                throw EditRefused("Another entry starts at that minute. Pick another time.")
+            }
+            impact
         }
         afterWrite()
-        return id
+        return impact
     }
 
     /** "Split here": a new entry inside an existing stretch, strictly between its start and the next. */
-    suspend fun split(id: Long, at: Long, mode: Mode, now: Long = System.currentTimeMillis()): Long {
+    suspend fun split(id: Long, at: Long, mode: Mode, now: Long = System.currentTimeMillis()): EditImpact = db.withTransaction {
         val all = entryDao.all()
         val i = all.indexOfFirst { it.id == id }
         if (i < 0) throw EditRefused("That entry no longer exists.")
         val end = all.getOrNull(i + 1)?.startUtc ?: now
         if (at <= all[i].startUtc || at >= end) throw EditRefused("Pick a time inside this entry to split it.")
-        return add(at, mode, now)
+        add(at, mode, now)
     }
 
     suspend fun delete(id: Long) {
@@ -122,8 +151,27 @@ class LogRepository(
         afterWrite()
     }
 
-    suspend fun saveSeed(seed: Seed) {
-        seedDao.upsert(seed.toRow())
+    /**
+     * "Bring your week in": the seed and the current mode's entry from [start], in one
+     * transaction. Refuses when the log already has another mode after [start].
+     */
+    suspend fun saveSetup(seed: Seed, mode: Mode, start: Long, now: Long = System.currentTimeMillis()) {
+        val ruleSet = prefs.current().ruleSet
+        db.withTransaction {
+            val all = entryDao.all()
+            if (all.any { it.startUtc > start && it.mode != mode.name }) {
+                throw EditRefused(
+                    "Your log has other modes after ${Fmt.when_(start, now, ZoneId.systemDefault())}. Pick the time your current mode started, or fix the log first.",
+                )
+            }
+            seedDao.upsert(seed.toRow())
+            val there = all.firstOrNull { it.startUtc == start }
+            if (there == null) {
+                entryDao.insert(ActivityEntry(startUtc = start, mode = mode.name, ruleSet = ruleSet.name, source = "EDIT", createdAt = now, editedAt = now))
+            } else if (there.mode != mode.name) {
+                entryDao.update(there.copy(mode = mode.name, editedAt = now))
+            }
+        }
         afterWrite()
     }
 
@@ -189,9 +237,11 @@ fun AbsenceRow.toCore() = Absence(date, runCatching { AbsenceKind.valueOf(kind) 
 fun SeedRow.toCore() = Seed(
     seededAtUtc, drivingSinceBreakMin, dayStartUtc, drivingTodayMin, thisWeekDrivingMin, lastWeekDrivingMin, thisWeekWorkMin,
     rtdPeriodWorkMin, tenHourDaysUsed, reducedDailyRestsUsed, lastWeeklyRestEndUtc, lastWeeklyRestMin, compensationOwedMin, compensationDueUtc,
+    part15Taken, readAtUtc, otherWorkSinceRestMin,
 )
 
 fun Seed.toRow() = SeedRow(
     1, seededAtUtc, drivingSinceBreakMin, dayStartUtc, drivingTodayMin, thisWeekDrivingMin, lastWeekDrivingMin, thisWeekWorkMin,
     rtdPeriodWorkMin, tenHourDaysUsed, reducedDailyRestsUsed, lastWeeklyRestEndUtc, lastWeeklyRestMin, compensationOwedMin, compensationDueUtc,
+    part15Taken, readAtUtc, otherWorkSinceRestMin,
 )

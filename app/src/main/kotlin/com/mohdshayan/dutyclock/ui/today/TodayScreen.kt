@@ -28,6 +28,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.AlarmOff
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material3.DropdownMenu
@@ -57,6 +58,8 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.android.play.core.review.ReviewManagerFactory
+import com.mohdshayan.dutyclock.alerts.AlertScheduler
+import com.mohdshayan.dutyclock.core.engine.AlertAccess
 import com.mohdshayan.dutyclock.core.engine.Counter
 import com.mohdshayan.dutyclock.core.engine.CounterKind
 import com.mohdshayan.dutyclock.core.engine.Fmt
@@ -65,6 +68,7 @@ import com.mohdshayan.dutyclock.core.model.Mode
 import com.mohdshayan.dutyclock.core.model.RuleSet
 import com.mohdshayan.dutyclock.ui.components.DayDisc
 import com.mohdshayan.dutyclock.ui.components.DiscCentre
+import com.mohdshayan.dutyclock.ui.components.ExactAlertSheet
 import com.mohdshayan.dutyclock.ui.components.LimitRow
 import com.mohdshayan.dutyclock.ui.components.LimitSheet
 import com.mohdshayan.dutyclock.ui.components.LogErrorState
@@ -119,6 +123,20 @@ fun TodayScreen(
     val snackbar = LocalSnackbar.current
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    var exactSheet by rememberSaveable { mutableStateOf(false) }
+    val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        if (AlertAccess.afterPrompt(Build.VERSION.SDK_INT, ok, AlertScheduler.canScheduleExact(context)) == AlertAccess.Step.EXPLAIN_EXACT) exactSheet = true
+    }
+    // The first mode tap (or a 1.1.0 setup) asks for notifications, then explains exact alarms.
+    fun askAlerts() {
+        val granted = Build.VERSION.SDK_INT < 33 ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        when (AlertAccess.first(Build.VERSION.SDK_INT, granted, AlertScheduler.canScheduleExact(context))) {
+            AlertAccess.Step.ASK_NOTIFICATIONS -> notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            AlertAccess.Step.EXPLAIN_EXACT -> exactSheet = true
+            AlertAccess.Step.NONE -> Unit
+        }
+    }
 
     LaunchedEffect(Unit) {
         viewModel.events.collect { e ->
@@ -131,6 +149,7 @@ fun TodayScreen(
                     if (r == SnackbarResult.ActionPerformed) viewModel.undo(e.id)
                 }
                 is TodayEvent.Message -> scope.launch { snackbar.showSnackbar(e.text) }
+                TodayEvent.AskAlerts -> askAlerts()
             }
         }
     }
@@ -150,13 +169,20 @@ fun TodayScreen(
                     }
                 }
             }
-            TodayContent(s, viewModel, onCatchUp)
+            LaunchedEffect(s.askAlerts) {
+                if (s.askAlerts) {
+                    viewModel.markAlertsAsked()
+                    askAlerts()
+                }
+            }
+            TodayContent(s, viewModel, onCatchUp) { exactSheet = true }
         }
     }
+    if (exactSheet) ExactAlertSheet(onDismiss = { exactSheet = false })
 }
 
 @Composable
-private fun TodayContent(s: TodayState.Ready, vm: TodayViewModel, onCatchUp: () -> Unit) {
+private fun TodayContent(s: TodayState.Ready, vm: TodayViewModel, onCatchUp: () -> Unit, onAllowExact: () -> Unit) {
     val config = LocalConfiguration.current
     val wide = config.screenWidthDp >= 600
     // On a phone the disc gives up some size so at least two limits show above the mode bar.
@@ -174,7 +200,8 @@ private fun TodayContent(s: TodayState.Ready, vm: TodayViewModel, onCatchUp: () 
             val (b, sm) = split(ev.breakCompleteAt!! - ev.now, true)
             DiscCentre("break-complete", b, sm, if (ev.breakCompleteIsSplit) "Until the split break is complete" else "Until the break counts", false)
         }
-        else -> ev.counters.firstOrNull()?.let { c ->
+        // A limit the log cannot know yet never takes the centre.
+        else -> ev.counters.firstOrNull { !it.unknown }?.let { c ->
             val (b, sm) = split(if (c.over) -c.remainingMs else c.remainingMs, c.running || c.clock == com.mohdshayan.dutyclock.core.engine.Clock.WALL)
             DiscCentre(c.kind.name + c.met, b, sm, centreLabel(c), c.over)
         }
@@ -220,6 +247,7 @@ private fun TodayContent(s: TodayState.Ready, vm: TodayViewModel, onCatchUp: () 
         if (!wide) {
             Column(Modifier.padding(horizontal = 16.dp)) {
                 NotificationPrompt()
+                ExactPrompt(onAllowExact)
             }
         }
         if (wide) {
@@ -233,6 +261,7 @@ private fun TodayContent(s: TodayState.Ready, vm: TodayViewModel, onCatchUp: () 
                     }
                     Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
                         NotificationPrompt()
+                        ExactPrompt(onAllowExact)
                         limits()
                     }
                 }
@@ -270,6 +299,7 @@ private fun TodayContent(s: TodayState.Ready, vm: TodayViewModel, onCatchUp: () 
             onOffer = when (open.offer) {
                 Offer.TEN_HOUR_DAY -> ({ vm.useTenHourDay(ev.limits.dayStart); sheet = null })
                 Offer.REDUCED_REST -> ({ vm.takeReducedRest(ev.limits.dayStart); sheet = null })
+                Offer.BRING_WEEK_IN -> ({ sheet = null; onCatchUp() })
                 null -> null
             },
         )
@@ -356,6 +386,37 @@ private fun NotificationPrompt() {
     }
 }
 
+/** Shown while Android holds back exact alarms; "Allow" explains why and opens the setting. */
+@Composable
+private fun ExactPrompt(onAllow: () -> Unit) {
+    val context = LocalContext.current
+    var exact by remember { mutableStateOf(AlertScheduler.canScheduleExact(context)) }
+    LifecycleResumeEffect(Unit) {
+        exact = AlertScheduler.canScheduleExact(context)
+        onPauseOrDispose { }
+    }
+    if (!exact) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(vertical = 6.dp)
+                .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(RadiusMd))
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Outlined.AlarmOff, contentDescription = null, tint = MaterialTheme.colorScheme.onBackground, modifier = Modifier.size(22.dp))
+            Spacer(Modifier.width(10.dp))
+            Text(
+                "Alerts may arrive a few minutes late.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onAllow) { Text("Allow", color = MaterialTheme.colorScheme.onBackground, style = MaterialTheme.typography.labelLarge) }
+        }
+    }
+}
+
 @Composable
 private fun CatchUpCard(onOpen: () -> Unit, onDismiss: () -> Unit) {
     Column(
@@ -367,7 +428,7 @@ private fun CatchUpCard(onOpen: () -> Unit, onDismiss: () -> Unit) {
         Text("Bring your week in", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onBackground)
         Spacer(Modifier.height(4.dp))
         Text(
-            "Started mid-week? Enter what your tachograph shows so far and every limit starts from the right place. It takes a minute.",
+            "Started mid-week or mid-shift? Enter what your tachograph shows and what you are doing now, and every limit starts from the right place. It takes a minute.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

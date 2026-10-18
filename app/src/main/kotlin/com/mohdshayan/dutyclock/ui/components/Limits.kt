@@ -105,7 +105,7 @@ fun LimitRow(counter: Counter, onClick: () -> Unit, modifier: Modifier = Modifie
                 }
             }
         } else {
-            Text(counter.value, style = MaterialTheme.typography.titleLarge, color = cs.onBackground)
+            Text(counter.value, style = MaterialTheme.typography.titleLarge, color = if (counter.unknown) cs.onSurfaceVariant else cs.onBackground)
         }
     }
 }

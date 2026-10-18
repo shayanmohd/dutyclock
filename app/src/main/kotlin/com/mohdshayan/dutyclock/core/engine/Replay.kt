@@ -42,7 +42,7 @@ data class DayRecord(val start: Long, val drivingMs: Long)
  * rule set of the day, optional derogations are never applied, and a rest in progress never
  * clears a debt or spends a reduced rest until it ends.
  */
-class Replay(seed: Seed?) {
+class Replay(seed: Seed?, between: List<Segment> = emptyList()) {
     // Breaks from driving, GOV.UK 1.4: 45 minutes, or 15 then 30, within 4.5 hours of driving.
     var drivingSinceBreak = 0L; private set
     var part15 = false; private set
@@ -82,6 +82,8 @@ class Replay(seed: Seed?) {
 
     /** Set when the last segment fed was an unfinished rest. */
     var ongoingRest: Segment? = null; private set
+    /** The day start that an unfinished rest of 9 hours or more has just closed, else null. */
+    var closedDayStart: Long? = null; private set
     var part15BeforeOngoing = false; private set
 
     private var breakFlagged = false
@@ -94,20 +96,31 @@ class Replay(seed: Seed?) {
     init {
         if (seed != null) {
             val t = seed.seededAtUtc
-            val wk = FixedWeek.start(t)
-            drivingSinceBreak = seed.drivingSinceBreakMin * MINUTE_MS
+            // The weeks and the working time period are those of the reading (1.0.0 seeds: seededAtUtc).
+            val ref = seed.readAtUtc ?: t
+            val wk = FixedWeek.start(ref)
+            // The reading less what the log adds between the start of counting and the reading.
+            val st = Setup.start(seed, between)
+            drivingSinceBreak = st.drivingSinceBreak
             dayStart = seed.dayStartUtc
-            drivingToday = seed.drivingTodayMin * MINUTE_MS
-            weekDriving[wk] = seed.thisWeekDrivingMin * MINUTE_MS
-            weekDriving[wk - WEEK_MS] = seed.lastWeekDrivingMin * MINUTE_MS
-            // Driving is working time, so the week's work is at least its driving.
-            weekWork[wk] = maxOf(seed.thisWeekWorkMin, seed.thisWeekDrivingMin) * MINUTE_MS
+            drivingToday = st.drivingToday
+            weekDriving[wk] = st.thisWeekDriving
+            weekDriving[wk - WEEK_MS] = st.lastWeekDriving
+            // Driving is working time, so the week's work is at least its driving (Setup.start keeps that).
+            weekWork[wk] = st.thisWeekWork
             // Today's driving is work in this shift. Driving since the last break less than today's
             // means a qualifying break (45 minutes, or 15 then 30) was taken, which covers the
-            // working time breaks too. Other work the catch-up does not ask for is not assumed.
-            shiftWork = drivingToday
+            // working time breaks too. Other work since the daily rest joins today's driving in the
+            // shift (not in workSinceRtdBreak: the sheet does not say which side of the break it fell). A
+            // split break's first 15 minutes already taken count as 15 minutes of working time break.
+            shiftWork = drivingToday + st.otherWorkSinceRest
             workSinceRtdBreak = drivingSinceBreak
-            shiftBreaks = if (seed.dayStartUtc != null && drivingSinceBreak < drivingToday) 45 * MINUTE_MS else 0L
+            part15 = seed.part15Taken
+            shiftBreaks = when {
+                seed.dayStartUtc != null && drivingSinceBreak < drivingToday -> 45 * MINUTE_MS
+                seed.part15Taken -> 15 * MINUTE_MS
+                else -> 0L
+            }
             tenHourSeed[wk] = seed.tenHourDaysUsed
             reducedCount = seed.reducedDailyRestsUsed
             lastWeeklyRestEnd = seed.lastWeeklyRestEndUtc
@@ -115,11 +128,11 @@ class Replay(seed: Seed?) {
             if (seed.compensationOwedMin > 0) {
                 debts += Debt(seed.compensationOwedMin * MINUTE_MS, seed.compensationDueUtc ?: (wk + 4 * WEEK_MS), t)
             }
-            rtdPeriodSeed = RtdPeriod.containing(t).startUtc to seed.rtdPeriodWorkMin * MINUTE_MS
+            rtdPeriodSeed = RtdPeriod.containing(ref).startUtc to st.periodWork
             if (seed.dayStartUtc != null) {
                 gbDayStart = seed.dayStartUtc
                 gbDriving = drivingToday
-                gbDuty = drivingToday
+                gbDuty = drivingToday + st.otherWorkSinceRest
             }
         }
     }
@@ -130,6 +143,7 @@ class Replay(seed: Seed?) {
 
     fun feed(seg: Segment, ongoing: Boolean) {
         ongoingRest = null
+        closedDayStart = null
         if (seg.mode == Mode.REST) rest(seg, ongoing) else duty(seg)
     }
 
@@ -278,6 +292,8 @@ class Replay(seed: Seed?) {
                 if (reducedCount > 3) findings += Finding(s, FindingKind.FOURTH_REDUCED_REST)
             }
             dailyRests += DailyRest(s, seg.end, kind, late)
+        } else {
+            closedDayStart = dayStart
         }
         closeDay()
     }
@@ -332,8 +348,8 @@ class Replay(seed: Seed?) {
 
     companion object {
         /** Replays [segments] from [seed]; the last one is treated as still running when [lastOngoing]. */
-        fun run(seed: Seed?, segments: List<Segment>, lastOngoing: Boolean): Replay {
-            val r = Replay(seed)
+        fun run(seed: Seed?, segments: List<Segment>, lastOngoing: Boolean, between: List<Segment> = emptyList()): Replay {
+            val r = Replay(seed, between)
             segments.forEachIndexed { i, seg -> r.feed(seg, lastOngoing && i == segments.lastIndex) }
             return r
         }

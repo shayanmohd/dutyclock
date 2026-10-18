@@ -1,6 +1,7 @@
 package com.mohdshayan.dutyclock.data.db
 
 import android.content.Context
+import androidx.room.ColumnInfo
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
@@ -13,6 +14,8 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.Update
 import androidx.room.Upsert
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 /** One tap on a tachograph mode. Lasts until the next entry. editedAt non-null marks it edited. */
@@ -46,6 +49,9 @@ data class SeedRow(
     val lastWeeklyRestMin: Int?,
     val compensationOwedMin: Int,
     val compensationDueUtc: Long?,
+    @ColumnInfo(defaultValue = "0") val part15Taken: Boolean = false,
+    val readAtUtc: Long? = null,
+    @ColumnInfo(defaultValue = "0") val otherWorkSinceRestMin: Int = 0,
 )
 
 @Entity(tableName = "absences", indices = [Index(value = ["date"], unique = true)])
@@ -125,8 +131,12 @@ interface AbsenceDao {
     suspend fun deleteAll()
 }
 
-/** Version 1 until the app has shipped; after that turn on exportSchema and write a Migration. */
-@Database(entities = [ActivityEntry::class, SeedRow::class, AbsenceRow::class], version = 1, exportSchema = false)
+/** 1.0.0 shipped version 1. Version 2 (1.1.0) adds three seed columns; see [SchemaSql]. Never destructive. */
+val MIGRATION_1_2 = object : Migration(1, 2) {
+    override fun migrate(db: SupportSQLiteDatabase) = SchemaSql.V1_TO_V2.forEach(db::execSQL)
+}
+
+@Database(entities = [ActivityEntry::class, SeedRow::class, AbsenceRow::class], version = 2, exportSchema = true)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun entryDao(): EntryDao
     abstract fun seedDao(): SeedDao
@@ -142,7 +152,7 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "dutyclock.db",
-                ).build().also { instance = it }
+                ).addMigrations(MIGRATION_1_2).build().also { instance = it }
             }
     }
 }

@@ -54,8 +54,9 @@ docs/                       privacy policy and font licences
 Every rule is a pure function in `core/` with golden JUnit tests built from worked examples in the
 GOV.UK guide "Drivers' hours and tachographs: goods vehicles" (formerly GV262) and the Department for
 Transport's Road Transport (Working Time) guidance. No optional derogation is applied (ferry or train
-interruptions, multi-manning, the coach 12-day rule, consecutive reduced weekly rests abroad), and a
-10-hour day or reduced rest counts only when the driver chooses it. Weeks are fixed Monday 00:00 to
+interruptions, multi-manning, the coach 12-day rule, consecutive reduced weekly rests abroad), and each
+countdown aims at the regular limit first, with a 10-hour day or reduced rest shown next to it; once the
+regular limit has passed, the countdown moves to the longer one, which counts as used once taken. Weeks are fixed Monday 00:00 to
 Sunday 24:00 in UTC, as the tachograph records them.
 
 ## Bundled licences

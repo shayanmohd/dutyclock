@@ -66,7 +66,9 @@ data class Absence(
 
 /**
  * The catch-up sheet: the state of a week already under way, as the driver reads it off the
- * tachograph. The engine starts from this at [seededAtUtc] and replays entries logged after it.
+ * tachograph. The engine counts from [seededAtUtc] and replays entries logged after it. The
+ * numbers are the raw reading at [readAtUtc]; the engine takes off what the log holds between
+ * the two instants (Setup.start), so an edit there can never put Today out of step with them.
  */
 @Serializable
 data class Seed(
@@ -84,6 +86,16 @@ data class Seed(
     val lastWeeklyRestMin: Int? = null,
     val compensationOwedMin: Int = 0,
     val compensationDueUtc: Long? = null,
+    /** A split break's first 15 minutes were taken before the snapshot. */
+    val part15Taken: Boolean = false,
+    /**
+     * When the driver read the numbers off the tachograph. Every number in this seed is as read at
+     * this instant, and the fixed weeks and the working time period are counted from it. Null for
+     * 1.0.0 seeds, which means seededAtUtc.
+     */
+    val readAtUtc: Long? = null,
+    /** Other work since the last daily rest, as read at [readAtUtc]. 0 for 1.0.0 seeds and backups. */
+    val otherWorkSinceRestMin: Int = 0,
 )
 
 /** Choices the driver makes for the current day. Nothing is assumed: the default is the stricter limit. */

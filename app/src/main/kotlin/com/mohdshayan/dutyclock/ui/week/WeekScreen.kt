@@ -81,7 +81,7 @@ data class WeekDay(
     val future: Boolean,
 )
 
-data class TotalRow(val title: String, val value: String, val detail: String, val over: Boolean)
+data class TotalRow(val title: String, val value: String, val detail: String, val over: Boolean, val unknown: Boolean = false)
 
 sealed interface WeekState {
     data object Loading : WeekState
@@ -123,16 +123,20 @@ class WeekViewModel(app: Application) : AndroidViewModel(app) {
         val drive = r.weekDriving[ws] ?: 0L
         val prev = r.weekDriving[ws - WEEK_MS] ?: 0L
         val work = r.weekWork[ws] ?: 0L
+        // A week the log does not cover reads Unknown, unless the logged time alone is already over.
+        fun row(title: String, ms: Long, detail: String, over: Boolean, covered: Boolean) =
+            if (!covered && !over) TotalRow(title, "Unknown", "Unknown, bring your week in", false, unknown = true)
+            else TotalRow(title, Fmt.hm(ms), detail, over)
         val totals = buildList {
-            add(TotalRow("Driving this week", Fmt.hm(drive), "of 56:00", drive > 56 * HOUR_MS))
-            add(TotalRow("Driving over two weeks", Fmt.hm(drive + prev), "of 90:00, the week before ${Fmt.hm(prev)}", drive + prev > 90 * HOUR_MS))
+            add(row("Driving this week", drive, "of 56:00", drive > 56 * HOUR_MS, RuleEngine.covers(input, ws)))
+            add(row("Driving over two weeks", drive + prev, "of 90:00, the week before ${Fmt.hm(prev)}", drive + prev > 90 * HOUR_MS, RuleEngine.covers(input, ws - WEEK_MS)))
             if (off == 0) {
-                ev.counters.firstOrNull { it.kind == CounterKind.WEEKLY_REST }?.let { add(TotalRow(it.title, it.value, it.detail, it.over)) }
+                ev.counters.firstOrNull { it.kind == CounterKind.WEEKLY_REST }?.let { add(TotalRow(it.title, it.value, it.detail, it.over, it.unknown)) }
                 ev.counters.firstOrNull { it.kind == CounterKind.COMPENSATION }?.let { add(TotalRow(it.title, it.value, it.detail, it.over)) }
             }
-            add(TotalRow("Working time this week", Fmt.hm(work), "of 60:00, driving and other work", work > 60 * HOUR_MS))
+            add(row("Working time this week", work, "of 60:00, driving and other work", work > 60 * HOUR_MS, RuleEngine.covers(input, ws)))
             if (off == 0) {
-                ev.counters.firstOrNull { it.kind == CounterKind.RTD_AVERAGE }?.let { add(TotalRow(it.title, it.value, it.detail, it.over)) }
+                ev.counters.firstOrNull { it.kind == CounterKind.RTD_AVERAGE }?.let { add(TotalRow(it.title, it.value, it.detail, it.over, it.unknown)) }
             }
         }
         val findings = r.findings.filter { it.at >= ws && it.at < ws + WEEK_MS }.sortedBy { it.at }
@@ -220,7 +224,7 @@ private fun WeekContent(s: WeekState.Ready, vm: WeekViewModel, onToday: () -> Un
                         Spacer(Modifier.width(4.dp))
                         Text("Over ${t.value}", style = MaterialTheme.typography.titleLarge, color = cs.error)
                     } else {
-                        Text(t.value, style = MaterialTheme.typography.titleLarge, color = cs.onBackground)
+                        Text(t.value, style = MaterialTheme.typography.titleLarge, color = if (t.unknown) cs.onSurfaceVariant else cs.onBackground)
                     }
                 }
                 RowDivider()

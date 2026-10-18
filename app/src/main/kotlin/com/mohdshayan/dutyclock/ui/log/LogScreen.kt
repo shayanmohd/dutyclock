@@ -44,6 +44,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mohdshayan.dutyclock.core.engine.DayTotals
+import com.mohdshayan.dutyclock.core.engine.EditImpact
+import com.mohdshayan.dutyclock.core.engine.Setup
+import com.mohdshayan.dutyclock.core.model.Entry
+import com.mohdshayan.dutyclock.core.model.Seed
 import com.mohdshayan.dutyclock.core.engine.Fmt
 import com.mohdshayan.dutyclock.core.model.Mode
 import com.mohdshayan.dutyclock.core.model.RuleSet
@@ -88,12 +92,24 @@ data class LogRow(
     val ruleSet: RuleSet,
     val edited: Boolean,
     val carried: Boolean,
+    /** Ends at or before the start of counting: the brought-in numbers already hold it. */
+    val beforeSeed: Boolean = false,
+    /** Runs across the start of counting: Today counts it from this instant. */
+    val countedFrom: Long? = null,
 )
 
 sealed interface LogState {
     data object Loading : LogState
     data object Error : LogState
-    data class Ready(val date: LocalDate, val today: LocalDate, val rows: List<LogRow>, val strip: com.mohdshayan.dutyclock.core.engine.DayStrip, val zone: ZoneId) : LogState
+    data class Ready(
+        val date: LocalDate,
+        val today: LocalDate,
+        val rows: List<LogRow>,
+        val strip: com.mohdshayan.dutyclock.core.engine.DayStrip,
+        val zone: ZoneId,
+        val seed: Seed? = null,
+        val entries: List<Entry> = emptyList(),
+    ) : LogState
 }
 
 class LogViewModel(app: Application) : AndroidViewModel(app) {
@@ -111,10 +127,19 @@ class LogViewModel(app: Application) : AndroidViewModel(app) {
             val end = sorted.getOrNull(i + 1)?.startUtc ?: now
             val inDay = e.startUtc in from until to
             val carried = e.startUtc < from && end > from
-            if (inDay || carried) LogRow(e.id, e.startUtc, end, e.mode, e.ruleSet, e.edited, carried) else null
+            val s = input.seed?.seededAtUtc
+            if (inDay || carried) {
+                LogRow(
+                    e.id, e.startUtc, end, e.mode, e.ruleSet, e.edited, carried,
+                    beforeSeed = s != null && end <= s,
+                    countedFrom = if (s != null && e.startUtc < s && end > s) s else null,
+                )
+            } else {
+                null
+            }
         }
         val strip = DayTotals.strips(input.entries, d, d, now, zone).first()
-        LogState.Ready(d, DayTotals.localDate(now, zone), rows, strip, zone) as LogState
+        LogState.Ready(d, DayTotals.localDate(now, zone), rows, strip, zone, input.seed, input.entries) as LogState
     }
         .flowOn(Dispatchers.Default)
         .catch { emit(LogState.Error) }
@@ -125,12 +150,16 @@ class LogViewModel(app: Application) : AndroidViewModel(app) {
         if (!next.isAfter(LocalDate.now())) date.value = next
     }
 
-    private fun run(success: String, block: suspend () -> Unit) {
+    private fun run(success: String, block: suspend () -> EditImpact?) {
         viewModelScope.launch {
             try {
-                block()
+                val impact = block()
                 editorError.value = null
-                done.emit(success)
+                // Say so when an edit moved the start of counting, so Today's change is never a surprise.
+                done.emit(
+                    if (impact is EditImpact.Reanchor) "$success. Today counts it from ${Fmt.when_(impact.to, System.currentTimeMillis(), ZoneId.systemDefault())}."
+                    else success,
+                )
             } catch (e: EditRefused) {
                 editorError.value = e.message
             }
@@ -141,7 +170,7 @@ class LogViewModel(app: Application) : AndroidViewModel(app) {
         if (id == null) run("Entry added") { repo.add(start, mode) } else run("Entry saved") { repo.saveEdit(id, start, mode) }
 
     fun split(id: Long, at: Long, mode: Mode) = run("Entry split") { repo.split(id, at, mode) }
-    fun delete(id: Long) = run("Entry deleted") { repo.delete(id) }
+    fun delete(id: Long) = run("Entry deleted") { repo.delete(id); null }
     fun clearError() { editorError.value = null }
 }
 
@@ -158,7 +187,7 @@ private val EditingSaver = androidx.compose.runtime.saveable.Saver<Editing?, Lon
 )
 
 @Composable
-fun LogScreen(onRecords: () -> Unit, vm: LogViewModel = viewModel()) {
+fun LogScreen(onRecords: () -> Unit, onCatchUp: () -> Unit, vm: LogViewModel = viewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
     val snackbar = LocalSnackbar.current
     // Saved across rotation and process death, so an edit in progress is not lost.
@@ -227,7 +256,7 @@ fun LogScreen(onRecords: () -> Unit, vm: LogViewModel = viewModel()) {
                     Spacer(Modifier.height(24.dp))
                 }
             }
-            editing?.let { e -> EditorSheet(e, s.zone, s.today, vm) { editing = null } }
+            editing?.let { e -> EditorSheet(e, s, vm, { editing = null; onCatchUp() }) { editing = null } }
         }
     }
 }
@@ -251,6 +280,8 @@ private fun EntryRow(r: LogRow, zone: ZoneId, onClick: () -> Unit) {
             Text(r.mode.label, style = MaterialTheme.typography.titleMedium, color = cs.onBackground)
             val notes = listOfNotNull(
                 if (r.carried) "From ${Fmt.shortDay(r.start, zone)}" else null,
+                if (r.beforeSeed) "Before your brought-in numbers" else null,
+                r.countedFrom?.let { "Counted from ${Fmt.clock(it, zone)}" },
                 if (r.edited) "Edited" else null,
                 r.ruleSet.label,
             )
@@ -262,8 +293,10 @@ private fun EntryRow(r: LogRow, zone: ZoneId, onClick: () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun EditorSheet(e: Editing, zone: ZoneId, today: LocalDate, vm: LogViewModel, onDismiss: () -> Unit) {
+private fun EditorSheet(e: Editing, s: LogState.Ready, vm: LogViewModel, onCatchUp: () -> Unit, onDismiss: () -> Unit) {
     val cs = MaterialTheme.colorScheme
+    val zone = s.zone
+    val today = s.today
     val error by vm.editorError.collectAsStateWithLifecycle()
     val start0 = Instant.ofEpochMilli(e.start).atZone(zone)
     var mode by rememberSaveable { mutableStateOf(e.mode) }
@@ -271,7 +304,9 @@ private fun EditorSheet(e: Editing, zone: ZoneId, today: LocalDate, vm: LogViewM
     var time by rememberSaveable { mutableStateOf(start0.toLocalTime().withSecond(0).withNano(0)) }
     var pickDate by remember { mutableStateOf(false) }
     var pickTime by remember { mutableStateOf(false) }
-    val startMs = date.atTime(time).atZone(zone).toInstant().toEpochMilli()
+    // An unchanged time keeps the entry's exact instant, so saving it as it is moves nothing.
+    val picked = date.atTime(time).atZone(zone).toInstant().toEpochMilli()
+    val startMs = if (picked == e.start - Math.floorMod(e.start, 60_000L)) e.start else picked
 
     ModalBottomSheet(onDismissRequest = onDismiss, shape = SheetShape, containerColor = cs.surfaceVariant, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).navigationBarsPadding().padding(bottom = 20.dp)) {
@@ -290,9 +325,33 @@ private fun EditorSheet(e: Editing, zone: ZoneId, today: LocalDate, vm: LogViewM
                     color = cs.onSurfaceVariant,
                 )
             }
-            if (error != null) {
+            // What saving does to the start of counting, worked out before anything is saved.
+            val now = System.currentTimeMillis()
+            fun at(t: Long) = Fmt.when_(t, now, zone)
+            val impact = Setup.editImpact(s.seed, s.entries, e.id, startMs, mode)
+            val note = when (impact) {
+                is EditImpact.Reanchor ->
+                    "Your brought-in numbers start at ${at(s.seed!!.seededAtUtc)}. Saving moves that start to ${at(impact.to)}, so Today counts this from ${at(impact.to)}."
+                is EditImpact.CannotMove ->
+                    "Your brought-in numbers start at ${at(impact.start)} and cannot move to ${at(startMs)}. Today keeps counting from ${at(impact.start)}. To change it, bring your week in again."
+                is EditImpact.BeforeStart ->
+                    "This is before ${at(impact.start)}, where your brought-in numbers start. Those numbers already include it, so Today will not change. To change them, bring your week in again."
+                else -> null
+            }
+            if (note != null) {
+                Spacer(Modifier.height(12.dp))
+                Text(note, style = MaterialTheme.typography.bodyMedium, color = cs.onBackground)
+                if (impact is EditImpact.CannotMove || impact is EditImpact.BeforeStart) {
+                    Spacer(Modifier.height(8.dp))
+                    SecondaryButton("Bring your week in", onCatchUp)
+                }
+            }
+            val exceeds = (impact as? EditImpact.Exceeds)?.let {
+                "That puts more driving or work before ${at(it.readAt)} than the numbers you brought in. Pick another time, or bring your week in again."
+            }
+            if (error != null || exceeds != null) {
                 Spacer(Modifier.height(8.dp))
-                Text(error!!, style = MaterialTheme.typography.bodyMedium, color = cs.error)
+                Text(error ?: exceeds!!, style = MaterialTheme.typography.bodyMedium, color = cs.error)
             }
             Spacer(Modifier.height(16.dp))
             PrimaryButton(if (e.id == null) "Add entry" else "Save entry", { vm.save(e.id, startMs, mode) }, Modifier.fillMaxWidth())

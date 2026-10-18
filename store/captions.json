@@ -10,6 +10,7 @@
     { "src": "screenshots-raw/03-records.png", "out": "screenshots/03-records.png", "caption": "Print a 28-day record" },
     { "src": "screenshots-raw/04-week.png", "out": "screenshots/04-week.png", "caption": "Compensation owed and its deadline" },
     { "src": "screenshots-raw/05-plan.png", "out": "screenshots/05-plan.png", "caption": "Can I make it home?" },
-    { "src": "screenshots-raw/06-night.png", "out": "screenshots/06-night.png", "caption": "For the cab at night" }
+    { "src": "screenshots-raw/06-night.png", "out": "screenshots/06-night.png", "caption": "For the cab at night" },
+    { "src": "screenshots-raw/07-setup.png", "out": "screenshots/07-setup.png", "caption": "Enter what your tacho shows" }
   ]
 }

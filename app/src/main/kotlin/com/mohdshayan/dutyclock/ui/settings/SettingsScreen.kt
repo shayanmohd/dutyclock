@@ -3,8 +3,6 @@ package com.mohdshayan.dutyclock.ui.settings
 import com.mohdshayan.dutyclock.R
 
 import android.content.Intent
-import android.net.Uri
-import android.os.Build
 import android.provider.Settings as AndroidSettings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -15,7 +13,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
@@ -24,9 +21,7 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
@@ -55,6 +50,7 @@ import com.mohdshayan.dutyclock.core.time.RtdPeriod
 import com.mohdshayan.dutyclock.data.prefs.AppPrefs
 import com.mohdshayan.dutyclock.di.ServiceLocator
 import com.mohdshayan.dutyclock.ui.components.ChoiceChip
+import com.mohdshayan.dutyclock.ui.components.ExactAlertSheet
 import com.mohdshayan.dutyclock.ui.components.InkTextButton
 import com.mohdshayan.dutyclock.ui.components.PrimaryButton
 import com.mohdshayan.dutyclock.ui.components.RowDivider
@@ -64,12 +60,10 @@ import com.mohdshayan.dutyclock.ui.components.SkeletonRows
 import com.mohdshayan.dutyclock.ui.nav.LocalSnackbar
 import com.mohdshayan.dutyclock.ui.theme.RadiusMd
 import com.mohdshayan.dutyclock.ui.theme.RadiusSm
-import com.mohdshayan.dutyclock.ui.theme.SheetShape
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(onCatchUp: () -> Unit) {
     val prefs = ServiceLocator.appPrefs
@@ -214,28 +208,7 @@ fun SettingsScreen(onCatchUp: () -> Unit) {
         }
     }
 
-    if (explainExact) {
-        ModalBottomSheet(onDismissRequest = { explainExact = false }, shape = SheetShape, containerColor = cs.surfaceVariant) {
-            Column(Modifier.padding(horizontal = 24.dp).navigationBarsPadding().padding(bottom = 20.dp)) {
-                Text("Allow exact alerts", style = MaterialTheme.typography.headlineMedium, color = cs.onBackground)
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "A break alert is only useful at the minute the limit is reached. Android asks you to allow Dutyclock to set exact alarms. It sets at most three at a time, and only for your own limits.",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = cs.onBackground,
-                )
-                Spacer(Modifier.height(16.dp))
-                PrimaryButton("Open the setting", {
-                    explainExact = false
-                    if (Build.VERSION.SDK_INT >= 31) {
-                        context.startActivity(
-                            Intent(AndroidSettings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:" + context.packageName)),
-                        )
-                    }
-                }, Modifier.fillMaxWidth())
-            }
-        }
-    }
+    if (explainExact) ExactAlertSheet(onDismiss = { explainExact = false })
 
     dialog?.let { (title, body) ->
         AlertDialog(
@@ -308,4 +281,6 @@ private const val SOURCES =
         "of the Transport Act 1968, and the Road Transport (Working Time) Regulations 2005, as explained in the GOV.UK guide " +
         "\"Drivers' hours and tachographs: goods vehicles\" and the Department for Transport's working time guidance.\n\n" +
         "Optional derogations are never applied: no ferry or train interruptions, no multi-manning, no coach 12-day rule, " +
-        "no two reduced weekly rests in a row, and a 10-hour day or reduced rest only when you choose it."
+        "no two reduced weekly rests in a row. Each countdown aims at the regular limit first and shows a 10-hour day or " +
+        "reduced rest next to it while you have one left. Once the regular limit has passed, the countdown moves to the " +
+        "longer one, which counts as used once you take it."

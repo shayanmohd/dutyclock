@@ -29,7 +29,7 @@ enum class CounterKind {
 /** What makes a counter move: driving time, working time, any duty, or the wall clock. */
 enum class Clock { DRIVING, WORK, DUTY, WALL }
 
-enum class Offer { TEN_HOUR_DAY, REDUCED_REST }
+enum class Offer { TEN_HOUR_DAY, REDUCED_REST, BRING_WEEK_IN }
 
 data class Counter(
     val kind: CounterKind,
@@ -48,6 +48,10 @@ data class Counter(
     val offerLabel: String? = null,
     /** A rest under way that is meeting this limit: the countdown is to its completion. */
     val met: Boolean = false,
+    /** The log does not cover what this limit needs yet; the value reads "Unknown" and nothing is armed. */
+    val unknown: Boolean = false,
+    /** The longer legal limit (a 10-hour day, a reduced rest) while the countdown aims at the regular one. */
+    val fallbackAt: Long? = null,
 )
 
 /** Every number the counters, the planner and the alerts are built from. Durations in ms. */
@@ -76,6 +80,16 @@ data class Limits(
     val gbDayEnd: Long?,
     val gbDriving: Long,
     val gbDuty: Long,
+    /** A reduced 9-hour rest's latest start, while one is still possible and not already the requirement. */
+    val dailyRestReducedLatestStart: Long? = null,
+    /** A 10-hour day is still left and not yet in use today. */
+    val tenHourFallback: Boolean = false,
+    /** Where what the engine knows begins: the seed's last week, or the first logged entry. */
+    val coverageStart: Long? = null,
+    val weekKnown: Boolean = true,
+    val fortnightKnown: Boolean = true,
+    val weeklyRestKnown: Boolean = true,
+    val periodKnown: Boolean = true,
 ) {
     val dailyDrivingLeft get() = dayLimit - drivingToday
     val weekLeft get() = 56 * HOUR_MS - weekDriving
@@ -107,6 +121,7 @@ data class Evaluation(
     /** When resting, the instant the current break becomes a qualifying one; null otherwise. */
     val breakCompleteAt: Long?,
     val breakCompleteIsSplit: Boolean,
+    val zone: ZoneId = ZoneOffset.UTC,
 )
 
 object RuleEngine {
@@ -119,8 +134,18 @@ object RuleEngine {
             .filter { it.end > clipStart }
             .map { if (it.start < clipStart) it.copy(start = clipStart) else it }
         val ongoing = segs.isNotEmpty() && segs.last().end == now
-        return Replay.run(input.seed, segs, ongoing)
+        val between = input.seed?.let { Setup.between(it, input.entries) } ?: emptyList()
+        return Replay.run(input.seed, segs, ongoing, between)
     }
+
+    /** Where what the engine knows begins: a seed brings in this week and last; without one, the log starts at its first entry. */
+    fun coverageStart(input: EngineInput): Long? {
+        val seed = input.seed
+        return if (seed != null) FixedWeek.start(seed.readAtUtc ?: seed.seededAtUtc) - WEEK_MS else input.entries.minOfOrNull { it.startUtc }
+    }
+
+    /** Whether the log, with its seed, covers the whole fixed week starting [weekStart]. */
+    fun covers(input: EngineInput, weekStart: Long): Boolean = coverageStart(input)?.let { it <= weekStart } ?: false
 
     /** Leave credit for the working time average: 8 hours a day, at most 48 in any fixed week. */
     fun leaveCredit(absences: List<Absence>, period: RtdPeriod): Long {
@@ -158,6 +183,10 @@ object RuleEngine {
         val gbStart = r.gbDayStart
         val gbActive = gbStart != null && now < gbStart + DAY_MS
 
+        val seed = input.seed
+        val coverage = coverageStart(input)
+        val seedPeriodIsCurrent = seed != null && RtdPeriod.containing(seed.readAtUtc ?: seed.seededAtUtc).startUtc == period.startUtc
+
         return Limits(
             breakLeft = 270 * MINUTE_MS - r.drivingSinceBreak,
             breakNeeded = if (r.part15) 30 * MINUTE_MS else 45 * MINUTE_MS,
@@ -183,6 +212,13 @@ object RuleEngine {
             gbDayEnd = if (gbActive) gbStart!! + DAY_MS else null,
             gbDriving = if (gbActive) r.gbDriving else 0L,
             gbDuty = if (gbActive) r.gbDuty else 0L,
+            dailyRestReducedLatestStart = if (ds != null && !reducedToday && !r.splitFirst && reducedLeft > 0) ds + DAY_MS - 9 * HOUR_MS else null,
+            tenHourFallback = !tenToday && (2 - tenUsed) > 0,
+            coverageStart = coverage,
+            weekKnown = coverage != null && coverage <= wk,
+            fortnightKnown = coverage != null && coverage <= wk - WEEK_MS,
+            weeklyRestKnown = !r.weekAnchorAssumed,
+            periodKnown = seedPeriodIsCurrent || (coverage != null && coverage <= period.startUtc),
         )
     }
 
@@ -225,11 +261,52 @@ object RuleEngine {
             compensationCounters(r, now, zone, ::add)
         }
 
-        counters.sortWith(compareByDescending<Counter> { it.over }.thenBy { it.remainingMs })
+        val shown = counters.map { c ->
+            val fallback = when {
+                c.kind == CounterKind.DAILY_DRIVING && l.tenHourFallback && mode == Mode.DRIVE && 10 * HOUR_MS > l.drivingToday ->
+                    now + 10 * HOUR_MS - l.drivingToday
+                c.kind == CounterKind.DAILY_REST && !c.met && c.title == DAILY_REST_STARTS_BY && l.dailyRestLatestStart != null && now < l.dailyRestLatestStart ->
+                    l.dailyRestReducedLatestStart
+                else -> null
+            }
+            unknownOr(c.copy(fallbackAt = fallback), l, now, zone)
+        }.sortedWith(compareByDescending<Counter> { it.over }.thenBy { it.unknown }.thenBy { it.remainingMs })
         return Evaluation(
             now = now, mode = mode, modeSince = last?.startUtc, ruleSet = input.ruleSet, limits = l,
-            counters = counters, replay = r, empty = empty,
-            breakCompleteAt = breakCompleteAt, breakCompleteIsSplit = r.part15BeforeOngoing,
+            counters = shown, replay = r, empty = empty,
+            breakCompleteAt = breakCompleteAt, breakCompleteIsSplit = r.part15BeforeOngoing, zone = zone,
+        )
+    }
+
+    private const val DAILY_REST_STARTS_BY = "Daily rest starts by"
+
+    /** Working lines that state a made-up anchor or a logged-only total; an Unknown row leaves them out. */
+    private val MADE_UP = listOf(
+        "Counted from your first logged duty", "Last weekly rest ended", "Latest start", "Driving since Monday",
+        "This week:", "Last week:", "Driving and other work since Monday", "Worked plus leave credit", "Leave credited",
+    )
+
+    /**
+     * A limit the log cannot know yet reads "Unknown" with nothing armed, unless the logged time
+     * alone has already passed it, which is certain.
+     */
+    private fun unknownOr(c: Counter, l: Limits, now: Long, zone: ZoneId): Counter {
+        if (c.over || c.met) return c
+        val from = l.coverageStart?.let { Fmt.dayClock(it, zone) } ?: ""
+        val why = when (c.kind) {
+            CounterKind.WEEKLY_REST -> if (!l.weeklyRestKnown && c.title == "Weekly rest starts by") "No weekly rest logged or brought in yet, so the deadline is unknown" else null
+            CounterKind.WEEK_56, CounterKind.RTD_WEEK_60 -> if (!l.weekKnown) "Your log starts $from, after this week began on Monday 00:00 UTC" else null
+            CounterKind.FORTNIGHT_90 -> if (!l.fortnightKnown) "Your log starts $from, after last week began on Monday 00:00 UTC" else null
+            CounterKind.RTD_AVERAGE ->
+                if (!l.periodKnown) "Your log starts $from, after this reference period began on ${DateTimeFormatter.ofPattern("d MMM", Locale.ENGLISH).format(l.rtdPeriod.startDate)}" else null
+            else -> null
+        } ?: return c
+        // Keep the rule lines; drop the made-up anchor and the logged-only totals.
+        val rule = if (c.kind == CounterKind.WEEKLY_REST) listOf("Weekly rest must start within six 24-hour periods of the end of the last one") else emptyList()
+        val kept = c.working.filter { line -> MADE_UP.none { line.startsWith(it) } }
+        return c.copy(
+            unknown = true, value = "Unknown", detail = "Unknown, bring your week in", running = false, limitAt = null, over = false,
+            offer = Offer.BRING_WEEK_IN, offerLabel = "Bring your week in", working = listOf(why) + rule + kept,
         )
     }
 
@@ -270,13 +347,16 @@ object RuleEngine {
         }
         add(
             CounterKind.DAILY_DRIVING, "Daily driving", l.dailyDrivingLeft, Clock.DRIVING, Fmt.hm(l.dailyDrivingLeft),
-            "${Fmt.hm(l.drivingToday)} of ${Fmt.hm(l.dayLimit)} driven since your last daily rest." +
-                if (l.tenHourToday) " 10-hour day." else if (l.tenHourDaysLeft == 0) " No 10-hour days left this week." else "",
+            "${Fmt.hm(l.drivingToday)} of ${Fmt.hm(l.dayLimit)} driven since your last daily rest." + when {
+                l.tenHourToday -> " 10-hour day in use: ${l.tenHourDaysLeft} of 2 left after today."
+                l.tenHourDaysLeft == 0 -> " No 10-hour days left this week."
+                else -> " A 10-hour day adds 1:00: ${l.tenHourDaysLeft} of 2 left."
+            },
             listOf(
                 "Driving since the end of your last daily or weekly rest: ${Fmt.hm(l.drivingToday)}",
                 "Limit today: ${Fmt.hm(l.dayLimit)}",
                 "10-hour days left this fixed week: ${l.tenHourDaysLeft} of 2",
-                "A 10-hour day is never assumed. Choose it here when you need it.",
+                "Past 9 hours, a 10-hour day counts as used. Choose it here to plan with it.",
             ),
             "Regulation 561/2006 Article 6(1); GOV.UK drivers' hours guide, section 1.4", false,
             if (tenLabel != null) Offer.TEN_HOUR_DAY else null, tenLabel,
@@ -288,27 +368,41 @@ object RuleEngine {
             val target = restStart + 11 * HOUR_MS
             add(
                 CounterKind.DAILY_REST, "Daily rest", target - now, Clock.WALL, Fmt.hm(restNow),
-                if (restNow >= 11 * HOUR_MS) "Regular daily rest taken: ${Fmt.hm(restNow)}."
-                else "Reduced rest reached. Regular at ${Fmt.when_(target, now, zone)}.",
+                when {
+                    restNow >= 11 * HOUR_MS -> "Regular daily rest taken: ${Fmt.hm(restNow)}."
+                    // A rest begun after the regular deadline can only count as reduced (Replay.daily).
+                    r.closedDayStart != null && restStart > r.closedDayStart!! + 13 * HOUR_MS ->
+                        "Reduced rest reached: ${Fmt.hm(restNow)}. It began after ${Fmt.clock(r.closedDayStart!! + 13 * HOUR_MS, zone)}, so it counts as reduced."
+                    else -> "Reduced rest reached. Regular at ${Fmt.when_(target, now, zone)}."
+                },
                 listOf("Resting since ${Fmt.when_(restStart, now, zone)}", "Regular daily rest: 11 hours", "Reduced daily rests left: ${l.reducedRestsLeft} of 3"),
                 "Regulation 561/2006 Articles 4(g) and 8; GOV.UK drivers' hours guide, section 1.5", true, null, null,
             )
         } else if (latest != null) {
-            val met = restStart != null && restStart <= latest && mode == Mode.REST
-            val remaining = if (met) restStart!! + l.dailyRestRequired - now else latest - now
+            // The regular deadline first, the reduced one next to it while a reduced rest is left;
+            // once the regular one has passed, the countdown moves to the reduced one, never Over before it.
+            val reduced = l.dailyRestReducedLatestStart
+            val lastLegal = reduced ?: latest
+            val met = restStart != null && restStart <= lastLegal && mode == Mode.REST
+            val target = if (now < latest || reduced == null) latest else reduced
+            val metNeed = if (restStart != null && restStart > latest) 9 * HOUR_MS else l.dailyRestRequired
+            val remaining = if (met) restStart!! + metNeed - now else target - now
             val reducedLabel = if (!l.reducedToday && !r.splitFirst && l.reducedRestsLeft > 0) "Take a reduced rest: ${l.reducedRestsLeft} of 3 left" else null
             add(
-                CounterKind.DAILY_REST, "Daily rest starts by", remaining, Clock.WALL, Fmt.when_(latest, now, zone),
+                CounterKind.DAILY_REST, DAILY_REST_STARTS_BY, remaining, Clock.WALL, Fmt.when_(target, now, zone),
                 when {
-                    met -> "Rest under way. ${Fmt.hours(l.dailyRestRequired)} complete at ${Fmt.when_(restStart!! + l.dailyRestRequired, now, zone)}."
+                    met -> "Rest under way. ${Fmt.hours(metNeed)} complete at ${Fmt.when_(restStart!! + metNeed, now, zone)}."
                     r.splitFirst -> "Split rest: 3 hours taken, 9 more to start by ${Fmt.when_(latest, now, zone)}."
                     l.reducedToday -> "Reduced 9-hour rest chosen. ${l.reducedRestsLeft - 1} left after tonight."
-                    else -> "11 hours within 24 of ${Fmt.when_(l.dayStart!!, now, zone)}. Reduced 9 hours: ${l.reducedRestsLeft} of 3 left."
+                    reduced == null -> "11 hours within 24 of ${Fmt.when_(l.dayStart!!, now, zone)}. No reduced rests left."
+                    now < latest -> "Regular 11 hours by ${Fmt.when_(latest, now, zone)}. Reduced 9 hours by ${Fmt.when_(reduced, now, zone)}: ${l.reducedRestsLeft} of 3 left."
+                    else -> "Too late to start 11 hours. A reduced 9-hour rest must start by ${Fmt.when_(reduced, now, zone)}: ${l.reducedRestsLeft} of 3 left."
                 },
-                listOf(
+                listOfNotNull(
                     "Your 24-hour period began at ${Fmt.when_(l.dayStart!!, now, zone)}",
                     "Rest needed: ${Fmt.hours(l.dailyRestRequired)}",
                     "Latest start: ${Fmt.dayClock(latest, zone)}",
+                    reduced?.let { "Reduced rest latest start: ${Fmt.dayClock(it, zone)}" },
                     "Regular 11 hours, split 3 then 9, or reduced 9 (three times between weekly rests)",
                     "Reduced rests left: ${l.reducedRestsLeft} of 3",
                 ),

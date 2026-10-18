@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.mohdshayan.dutyclock.core.model.DayChoices
 import com.mohdshayan.dutyclock.core.model.RuleSet
@@ -34,6 +35,10 @@ data class Settings(
     val counts: Map<String, Int> = emptyMap(),
     val reviewPrompted: Boolean = false,
     val catchupDismissed: Boolean = false,
+    /** The first-tap alert access flow has run (1.1.0). Not exported in backups. */
+    val alertAccessAsked: Boolean = false,
+    /** Alerts already posted, as "key@at", so an early alarm never sounds twice. Not exported in backups. */
+    val alertsPosted: Set<String> = emptySet(),
 )
 
 class AppPrefs(private val context: Context) {
@@ -54,6 +59,8 @@ class AppPrefs(private val context: Context) {
         val USAGE_OPT_IN = booleanPreferencesKey("usage_counts_opt_in")
         val REVIEW_PROMPTED = booleanPreferencesKey("review_prompted")
         val CATCHUP_DISMISSED = booleanPreferencesKey("catchup_dismissed")
+        val ALERT_ACCESS_ASKED = booleanPreferencesKey("alert_access_asked")
+        val ALERTS_POSTED = stringSetPreferencesKey("alerts_posted")
         const val COUNT_PREFIX = "count_"
     }
 
@@ -82,6 +89,8 @@ class AppPrefs(private val context: Context) {
             counts = Count.entries.associate { it.key to (p[intPreferencesKey(it.key)] ?: 0) },
             reviewPrompted = p[Keys.REVIEW_PROMPTED] ?: false,
             catchupDismissed = p[Keys.CATCHUP_DISMISSED] ?: false,
+            alertAccessAsked = p[Keys.ALERT_ACCESS_ASKED] ?: false,
+            alertsPosted = p[Keys.ALERTS_POSTED] ?: emptySet(),
         )
     }
 
@@ -106,6 +115,16 @@ class AppPrefs(private val context: Context) {
                 val k = intPreferencesKey(count.key)
                 it[k] = (it[k] ?: 0) + 1
             }
+        }
+    }
+
+    /** Marks an alert posted and forgets marks whose alert time is more than 24 hours past. */
+    suspend fun markPosted(key: String, at: Long, now: Long) {
+        context.dataStore.edit { p ->
+            val kept = (p[Keys.ALERTS_POSTED] ?: emptySet()).filter { mark ->
+                mark.substringAfterLast('@').toLongOrNull()?.let { it >= now - 24 * 3_600_000L } ?: false
+            }
+            p[Keys.ALERTS_POSTED] = kept.toSet() + "$key@$at"
         }
     }
 

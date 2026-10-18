@@ -15,15 +15,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ReportProblem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -33,8 +29,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -50,13 +44,13 @@ import com.mohdshayan.dutyclock.core.plan.StepKind
 import com.mohdshayan.dutyclock.data.prefs.AppPrefs
 import com.mohdshayan.dutyclock.di.ServiceLocator
 import com.mohdshayan.dutyclock.ui.components.EmptyState
+import com.mohdshayan.dutyclock.ui.components.DurationField
 import com.mohdshayan.dutyclock.ui.components.PickerField
 import com.mohdshayan.dutyclock.ui.components.PrimaryButton
 import com.mohdshayan.dutyclock.ui.components.RowDivider
 import com.mohdshayan.dutyclock.ui.components.SecondaryButton
 import com.mohdshayan.dutyclock.ui.components.TimePickDialog
 import com.mohdshayan.dutyclock.ui.theme.RadiusLg
-import com.mohdshayan.dutyclock.ui.theme.RadiusSm
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
@@ -74,15 +68,20 @@ sealed interface PlanUi {
 
 class PlanViewModel(app: Application) : AndroidViewModel(app) {
     private val repo = ServiceLocator.logRepository
-    val driving = MutableStateFlow("")
+    val drivingH = MutableStateFlow("")
+    val drivingM = MutableStateFlow("")
     val leaveAt = MutableStateFlow<LocalTime?>(null)
     val inputError = MutableStateFlow<String?>(null)
     val ui = MutableStateFlow<PlanUi>(PlanUi.Idle)
 
     fun plan() {
-        val need = Durations.parse(driving.value)
-        if (need == null || need <= 0) {
-            inputError.value = "Use hours and minutes, like 3.40."
+        val need = Durations.ofParts(drivingH.value, drivingM.value)
+        if (need == null) {
+            inputError.value = "Minutes go up to 59."
+            return
+        }
+        if (need <= 0) {
+            inputError.value = "Enter the driving left, in hours and minutes."
             return
         }
         inputError.value = null
@@ -118,7 +117,8 @@ class PlanViewModel(app: Application) : AndroidViewModel(app) {
 @Composable
 fun PlanScreen(onLog: () -> Unit, onRecords: () -> Unit, vm: PlanViewModel = viewModel()) {
     val cs = MaterialTheme.colorScheme
-    val driving by vm.driving.collectAsStateWithLifecycle()
+    val drivingH by vm.drivingH.collectAsStateWithLifecycle()
+    val drivingM by vm.drivingM.collectAsStateWithLifecycle()
     val leaveAt by vm.leaveAt.collectAsStateWithLifecycle()
     val inputError by vm.inputError.collectAsStateWithLifecycle()
     val ui by vm.ui.collectAsStateWithLifecycle()
@@ -129,27 +129,14 @@ fun PlanScreen(onLog: () -> Unit, onRecords: () -> Unit, vm: PlanViewModel = vie
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
         Column(Modifier.widthIn(max = 640.dp)) {
             Spacer(Modifier.height(8.dp))
-            Text("Driving left to get home", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
-            OutlinedTextField(
-                value = driving,
-                onValueChange = { vm.driving.value = it.take(6) },
-                placeholder = { Text("3.40") },
-                singleLine = true,
-                isError = inputError != null,
-                supportingText = { Text(inputError ?: "Hours and minutes of driving, like 3.40, as your route planner shows it.") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { plan() }),
-                textStyle = MaterialTheme.typography.titleLarge,
-                shape = RoundedCornerShape(RadiusSm),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = cs.onBackground,
-                    unfocusedBorderColor = cs.outline,
-                    cursorColor = cs.onBackground,
-                    errorSupportingTextColor = cs.error,
-                    unfocusedSupportingTextColor = cs.onSurfaceVariant,
-                    focusedSupportingTextColor = cs.onSurfaceVariant,
-                ),
-                modifier = Modifier.fillMaxWidth(),
+            DurationField(
+                "Driving left to get home", drivingH, drivingM, { vm.drivingH.value = it }, { vm.drivingM.value = it },
+                last = true, onDone = { plan() },
+            )
+            Text(
+                inputError ?: "Hours and minutes of driving, as your route planner shows it.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (inputError != null) cs.error else cs.onSurfaceVariant,
             )
             PickerField("Leaving at", leaveAt?.let { "%02d:%02d".format(it.hour, it.minute) } ?: "Now", { pickTime = true })
             Spacer(Modifier.height(8.dp))
@@ -182,11 +169,12 @@ fun PlanScreen(onLog: () -> Unit, onRecords: () -> Unit, vm: PlanViewModel = vie
                         onAction = onLog,
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    is PlanResult.Fits -> ResultCard(u.zone, u.start, r.steps, "Arrive ${Fmt.clock(r.arrival, u.zone)}", r.arrival, null, null, null)
+                    is PlanResult.Fits -> ResultCard(u.zone, u.start, r.steps, "Arrive ${Fmt.clock(r.arrival, u.zone)}", r.arrival, null, null, null, unknown = r.unknown)
                     is PlanResult.Blocked -> ResultCard(
                         u.zone, u.start, r.steps, "Not tonight", null, r.message(), r.fix,
                         if (r.fix != null) ({ vm.applyFix(r.blocker) }) else null,
                         fixLabel = if (r.blocker == Blocker.DAILY_DRIVING) "Use a 10-hour day" else "Take a reduced rest",
+                        unknown = r.unknown,
                     )
                 }
             }
@@ -211,6 +199,7 @@ private fun ResultCard(
     fix: String?,
     onFix: (() -> Unit)?,
     fixLabel: String = "",
+    unknown: Set<Blocker> = emptySet(),
 ) {
     val cs = MaterialTheme.colorScheme
     Column(
@@ -230,6 +219,17 @@ private fun ResultCard(
             if (fix != null) {
                 Spacer(Modifier.height(4.dp))
                 Text(fix, style = MaterialTheme.typography.bodyLarge, color = cs.onBackground, modifier = Modifier.padding(start = 28.dp))
+            }
+        }
+        if (unknown.isNotEmpty()) {
+            // Limits the log does not cover yet are not counted in this plan, and it says which.
+            val labels = unknown.sortedBy { it.ordinal }.map { it.label }
+            val list = if (labels.size == 1) labels[0] else labels.dropLast(1).joinToString(", ") + " and " + labels.last()
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.Top) {
+                Icon(Icons.Outlined.ReportProblem, contentDescription = null, tint = cs.onBackground, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Not counted yet: $list. Bring your week in to count them.", style = MaterialTheme.typography.bodyLarge, color = cs.onBackground)
             }
         }
         Spacer(Modifier.height(12.dp))

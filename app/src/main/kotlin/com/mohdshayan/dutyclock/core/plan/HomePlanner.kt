@@ -28,13 +28,14 @@ sealed interface PlanResult {
     /** No log and no catch-up yet: the planner has nothing to start from. */
     data object NeedsLog : PlanResult
 
-    data class Fits(val steps: List<PlanStep>, val arrival: Long) : PlanResult
+    data class Fits(val steps: List<PlanStep>, val arrival: Long, val unknown: Set<Blocker> = emptySet()) : PlanResult
 
     data class Blocked(
         val steps: List<PlanStep>,
         val blocker: Blocker,
         val shortByMs: Long,
         val fix: String?,
+        val unknown: Set<Blocker> = emptySet(),
     ) : PlanResult {
         fun message(): String = "You run out of ${blocker.label} ${Fmt.minutesOrHours(shortByMs)} short."
     }
@@ -79,10 +80,18 @@ object HomePlanner {
         var t = maxOf(now, leaveAt)
         if (t > now && current?.mode != Mode.REST) extra += Entry(SYNTH, now, Mode.REST, rs)
         var remaining = drivingNeeded
+        // Limits the log does not cover yet (fix 1e). Their logged numbers stay in the caps, because
+        // logged time can only undercount: a cap that binds on logged time alone binds for certain.
+        val unknown = mutableSetOf<Blocker>()
         repeat(60) {
             val inp = input.copy(entries = input.entries + extra)
             val r = RuleEngine.replay(inp, t)
             val l = RuleEngine.limits(inp, r, t)
+            if (rs.isEuFamily) {
+                if (!l.weeklyRestKnown) unknown += Blocker.WEEKLY_REST
+                if (!l.weekKnown) unknown += listOf(Blocker.WEEK_56, Blocker.RTD_WEEK)
+                if (!l.fortnightKnown) unknown += Blocker.FORTNIGHT_90
+            }
             val caps: List<Pair<Blocker?, Long>> = if (rs.isEuFamily) buildList {
                 add(Pair<Blocker?, Long>(null, l.breakLeft))
                 add(Blocker.DAILY_DRIVING to l.dailyDrivingLeft)
@@ -101,12 +110,12 @@ object HomePlanner {
                 steps += PlanStep(StepKind.DRIVE, t, t + d)
                 t += d
                 remaining -= d
-                if (remaining <= 0) return PlanResult.Fits(steps, t)
+                if (remaining <= 0) return PlanResult.Fits(steps, t, unknown.toSet())
                 extra += Entry(SYNTH, t, Mode.REST, rs)
             } else {
                 val binding = caps.filter { it.second < MINUTE_MS }
                 val hard = binding.firstOrNull { it.first != null }
-                if (hard != null) return PlanResult.Blocked(steps, hard.first!!, remaining, null)
+                if (hard != null) return PlanResult.Blocked(steps, hard.first!!, remaining, null, unknown.toSet())
                 // Only breaks bind: take the longer of the driving break and the working time break.
                 val need = maxOf(
                     if (l.breakLeft < MINUTE_MS) l.breakNeeded else 0L,
@@ -117,6 +126,6 @@ object HomePlanner {
                 t += need
             }
         }
-        return PlanResult.Blocked(steps, Blocker.DAILY_DRIVING, remaining, null)
+        return PlanResult.Blocked(steps, Blocker.DAILY_DRIVING, remaining, null, unknown.toSet())
     }
 }

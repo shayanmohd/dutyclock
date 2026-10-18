@@ -10,11 +10,12 @@ Tachograph Drivers Hours Timer
 
 ## Short description
 <!-- at most 80 characters, one line, no trailing period. -->
-HGV and van drivers hours, breaks and WTD. One-time, offline, no ads or account
+Tap-in HGV & van drivers hours: breaks, rests, WTD. Never reads tacho or card
 
 ## Full description
 <!-- at most 4000 characters. Plain paragraphs and CAPITALISED headings; Play renders no markdown.
      Say what the app does, what it stores, that it works offline, and that it is paid once. -->
+You tap each mode change yourself: nothing reads your tachograph or driver card.
 Drivers' hours countdowns for EU 561/2006, AETR and GB domestic rules: break due, daily driving, rest deadlines, the 56-hour week and the 90-hour fortnight.
 Split breaks count properly: 15 minutes then 30 minutes resets your 4.5-hour clock, and every break start time can be edited afterwards.
 Working time too: RTD breaks after 6 and 9 hours, the 60-hour week and your 48-hour average, with a printable 28-day record.
@@ -34,11 +35,11 @@ What it tracks
 Can I make it home?
 Enter the driving left to get home. Dutyclock lays out the soonest order of driving and breaks the rules allow, from your own log, or shows where it runs out.
 
-Missed a tap? Move, split or delete any entry and the countdowns recalculate. Started mid-week? Enter your week so far in one sheet.
+Missed a tap? Move, split or delete any entry and the countdowns recalculate. Started mid-week or mid-shift? Enter what your tachograph shows and what you are doing now, in one sheet, and a break already under way counts from when it started.
 
 Export a 28-day PDF with a strip and totals for each day, weekly and fortnightly sums and working time, plus CSV and a backup you can restore on a new phone.
 
-Alerts use exact alarms when you allow them, with an alarm sound and vibration, and fall back to standard alerts if you do not. Nothing needs a tap while you drive.
+Alerts sound with an alarm tone and vibration. They use exact alarms, which Dutyclock asks for on your first tap; without them Android may deliver an alert a few minutes off. Nothing needs a tap while you drive.
 
 One-time purchase. No ads, no subscription, no account. Works fully offline.
 
@@ -50,7 +51,7 @@ English interface. Ferry and train crossings, multi-manning, GB domestic passeng
 
 ## Release notes
 <!-- at most 500 characters, shown under What's new. -->
-First release: EU 561/2006, AETR, van and GB domestic countdowns, working time breaks and averages, split breaks, reduced rest compensation, an editable log, a drive-home planner and a 28-day PDF record. Advisory, not a tachograph.
+Bring your week in now asks what you are doing and since when, so a break already under way counts from its real start. It also takes a shift begun before midnight and a split break's first 15 minutes. Hours and minutes have their own boxes. Dutyclock asks for exact alarms on your first tap; once allowed, alerts sound on time even when the phone is idle. Daily rest and driving show the regular and reduced deadlines together. Limits it cannot know yet say Unknown. Advisory, not a tachograph.
 
 ## Category
 <!-- one Play category, for example Productivity or Tools. -->

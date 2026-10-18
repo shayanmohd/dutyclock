@@ -26,19 +26,45 @@ object AlertPlan {
         CounterKind.RTD_AVERAGE -> null
     }
 
-    fun plan(ev: Evaluation, leadMin: Int, breakComplete: Boolean, max: Int = 3): List<PlannedAlert> {
+    /**
+     * While a longer legal limit is left (a 10-hour day, a reduced rest), the regular limit's
+     * alerts say so instead of claiming the limit is reached.
+     */
+    private fun soft(c: Counter, ev: Evaluation, fallbackAt: Long): Pair<String, String>? = when (c.kind) {
+        CounterKind.DAILY_DRIVING -> {
+            val left = "A 10-hour day allows 1 more hour: ${ev.limits.tenHourDaysLeft} of 2 left."
+            "9 hours of driving in %d minutes. $left" to "9 hours of driving reached. $left"
+        }
+        CounterKind.DAILY_REST -> {
+            val until = "A reduced 9-hour rest can start until ${Fmt.clock(fallbackAt, ev.zone)}."
+            "A regular 11-hour rest must start in %d minutes. $until" to "Start now for a regular 11-hour rest. $until"
+        }
+        else -> null
+    }
+
+    /** Leaves out an alert already posted ("key@at" in [posted]) before taking the earliest [max]. */
+    fun plan(ev: Evaluation, leadMin: Int, breakComplete: Boolean, max: Int = 3, posted: Set<String> = emptySet()): List<PlannedAlert> {
         val now = ev.now
         val out = mutableListOf<PlannedAlert>()
         for (c in ev.counters) {
-            val at = c.limitAt ?: continue
-            if (c.met || c.over) continue
+            if (c.met || c.over || c.unknown) continue
             // A rest already under way meets a "rest must start by" deadline as long as it goes on;
             // the next duty tap re-arms everything, so no alarm wakes a driver who is resting.
             if (ev.mode == Mode.REST && (c.kind == CounterKind.DAILY_REST || c.kind == CounterKind.WEEKLY_REST)) continue
             val (lead, limit) = noun(c.kind) ?: continue
-            val leadAt = at - leadMin * MINUTE_MS
-            if (leadAt > now) out += PlannedAlert(leadAt, c.title, lead.format(leadMin), "${c.kind}-lead")
-            if (at > now) out += PlannedAlert(at, c.title, limit, "${c.kind}-limit")
+            val at = c.limitAt
+            val fb = c.fallbackAt
+            val lead2At = fb?.let { it - leadMin * MINUTE_MS }
+            if (at != null) {
+                val (l1, l2) = fb?.let { soft(c, ev, it) } ?: (lead to limit)
+                val leadAt = at - leadMin * MINUTE_MS
+                if (leadAt > now) out += PlannedAlert(leadAt, c.title, l1.format(leadMin), "${c.kind}-lead")
+                if (at > now) out += PlannedAlert(at, c.title, l2, "${c.kind}-limit")
+            }
+            if (fb != null && lead2At != null) {
+                if (lead2At > now && (at == null || lead2At > at)) out += PlannedAlert(lead2At, c.title, lead.format(leadMin), "${c.kind}-lead2")
+                if (fb > now) out += PlannedAlert(fb, c.title, limit, "${c.kind}-limit2")
+            }
         }
         val bc = ev.breakCompleteAt
         if (breakComplete && ev.mode == Mode.REST && bc != null && bc > now) {
@@ -47,6 +73,6 @@ object AlertPlan {
                 "4:30 of driving available after this break.", "break-complete",
             )
         }
-        return out.sortedBy { it.at }.distinctBy { it.key }.take(max)
+        return out.filter { "${it.key}@${it.at}" !in posted }.sortedBy { it.at }.distinctBy { it.key }.take(max)
     }
 }

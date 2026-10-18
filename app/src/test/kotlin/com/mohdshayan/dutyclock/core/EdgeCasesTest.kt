@@ -118,18 +118,17 @@ class EdgeCasesTest {
         assertEquals(s.end + m(1), (tiny as PlanResult.Fits).arrival)
     }
 
+    /** Plan test 22: digits-only boxes need no decimal key on any keyboard. */
     @Test
-    fun `durations take two-digit minutes and refuse what they cannot read`() {
-        assertEquals(0L, Durations.parse("0"))
-        assertEquals(h(999, 59), Durations.parse("999.59"))
-        assertEquals(h(3, 40), Durations.parse("3,40"))
-        assertEquals(h(3, 5), Durations.parse("3:05"))
-        assertNull("3.4 is ambiguous", Durations.parse("3.4"))
-        assertNull(Durations.parse("3:5"))
-        assertNull(Durations.parse("-1"))
-        assertNull(Durations.parse("1000"))
-        assertNull(Durations.parse("3:60"))
-        assertNull(Durations.parse(":30"))
+    fun `hours and minutes in separate boxes`() {
+        assertEquals(h(4, 15), Durations.ofParts("4", "15"))
+        assertEquals(m(45), Durations.ofParts("", "45"))
+        assertEquals(h(4), Durations.ofParts("4", ""))
+        assertEquals(0L, Durations.ofParts("", ""))
+        assertEquals(h(56, 30), Durations.ofParts("56", "30"))
+        assertEquals(h(700), Durations.ofParts("700", ""))
+        assertNull(Durations.ofParts("4", "60"))
+        assertNull(Durations.ofParts("4", "x"))
     }
 
     @Test

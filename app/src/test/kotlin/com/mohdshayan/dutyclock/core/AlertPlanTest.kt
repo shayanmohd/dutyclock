@@ -1,10 +1,8 @@
 package com.mohdshayan.dutyclock.core
 
 import com.mohdshayan.dutyclock.core.engine.AlertPlan
-import com.mohdshayan.dutyclock.core.engine.Durations
 import com.mohdshayan.dutyclock.core.model.Mode
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -32,16 +30,5 @@ class AlertPlanTest {
         assertEquals(t0 + h(3, 20) + m(45), bc.at)
         assertTrue(alerts.none { it.key.startsWith("BREAK") })
         assertTrue(s.eval().mode == Mode.REST)
-    }
-
-    @Test
-    fun `durations read the way drivers type them`() {
-        assertEquals(h(3, 40), Durations.parse("3:40"))
-        assertEquals(h(3, 40), Durations.parse(" 3.40 "))
-        assertEquals(h(9), Durations.parse("9"))
-        assertEquals(m(45), Durations.parse("0:45"))
-        assertNull(Durations.parse("3:75"))
-        assertNull(Durations.parse("three"))
-        assertNull(Durations.parse(""))
     }
 }

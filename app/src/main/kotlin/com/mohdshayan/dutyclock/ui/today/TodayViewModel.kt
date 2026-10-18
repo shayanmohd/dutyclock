@@ -36,12 +36,16 @@ sealed interface TodayState {
         val settings: Settings,
         val showCatchUp: Boolean,
         val completedDays: Int,
+        /** A 1.1.0 setup saved its first mode entry and the alert access flow has not run yet. */
+        val askAlerts: Boolean = false,
     ) : TodayState
 }
 
 sealed interface TodayEvent {
     data class Started(val mode: Mode, val id: Long) : TodayEvent
     data class Message(val text: String) : TodayEvent
+    /** Run the first-tap alert access flow: notifications, then exact alarms. */
+    data object AskAlerts : TodayEvent
 }
 
 fun ticker(periodMs: Long = 1000L) = flow {
@@ -70,7 +74,8 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
         val firstEntry = input.entries.minOfOrNull { it.startUtc }
         val showCatchUp = input.seed == null && !settings.catchupDismissed && (firstEntry == null || now - firstEntry < WEEK_MS)
         val completed = ev.replay.days.count { it.drivingMs > 0 }
-        TodayState.Ready(ev, strip.pieces, nowMin, currentFromMin, settings, showCatchUp, completed) as TodayState
+        val askAlerts = !settings.alertAccessAsked && input.seed?.readAtUtc != null
+        TodayState.Ready(ev, strip.pieces, nowMin, currentFromMin, settings, showCatchUp, completed, askAlerts) as TodayState
     }
         .flowOn(Dispatchers.Default)
         .catch { emit(TodayState.Error) }
@@ -80,8 +85,15 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val id = repo.tap(mode) ?: return@launch
             _events.emit(TodayEvent.Started(mode, id))
+            if (!prefs.current().alertAccessAsked) {
+                markAlertsAsked()
+                _events.emit(TodayEvent.AskAlerts)
+            }
         }
     }
+
+    /** Set before the flow runs, so a driver is asked once even if the process dies mid-flow. */
+    suspend fun markAlertsAsked() = prefs.set(AppPrefs.Keys.ALERT_ACCESS_ASKED, true)
 
     fun undo(id: Long) {
         viewModelScope.launch { repo.undo(id) }

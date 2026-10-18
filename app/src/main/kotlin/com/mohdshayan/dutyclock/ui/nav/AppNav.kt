@@ -4,7 +4,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -208,7 +210,8 @@ private fun MainShell(settings: Settings) {
                     }
                 },
             ) { padding ->
-                Graph(nav, Modifier.padding(padding))
+                // The open keypad shrinks the scrolling area by the part the bottom bar does not already cover.
+                Graph(nav, Modifier.padding(padding).consumeWindowInsets(padding).imePadding())
             }
         }
     }
@@ -221,7 +224,7 @@ private fun Graph(nav: NavHostController, modifier: Modifier) {
             TodayScreen(onCatchUp = { nav.navigate(CatchUpRoute) }, onRecords = { nav.navigate(RecordsRoute) })
         }
         composable<WeekRoute> { WeekScreen(onRecords = { nav.navigate(RecordsRoute) }, onToday = { nav.navigate(TodayRoute) }) }
-        composable<LogRoute> { LogScreen(onRecords = { nav.navigate(RecordsRoute) }) }
+        composable<LogRoute> { LogScreen(onRecords = { nav.navigate(RecordsRoute) }, onCatchUp = { nav.navigate(CatchUpRoute) }) }
         composable<PlanRoute> { PlanScreen(onLog = { nav.navigate(LogRoute) }, onRecords = { nav.navigate(RecordsRoute) }) }
         composable<RecordsRoute> { RecordsScreen(onLog = { nav.navigate(LogRoute) }) }
         composable<SettingsRoute> { SettingsScreen(onCatchUp = { nav.navigate(CatchUpRoute) }) }
