@@ -35,7 +35,8 @@ class LivePlanTest {
         val seen = mutableListOf<ShownPlan>()
         val job = launch { LivePlan.shown(PlanRequest(h(2, 40), null), input, clock).collect { seen += it } }
 
-        assertEquals(listOf(StepKind.DRIVE to h(1, 50), StepKind.BREAK to m(30), StepKind.DRIVE to m(50)), seen.lastSteps())
+        // A minute from complete, the split is finished first: sooner home than 1:50, 0:30, 0:50.
+        assertEquals(listOf(StepKind.FINISH_BREAK to m(1), StepKind.DRIVE to h(2, 40)), seen.lastSteps())
 
         // The split completes, the driver taps Driving a minute later and comes back to Plan.
         s.rest(1).drive(1)

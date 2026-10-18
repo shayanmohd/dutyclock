@@ -47,6 +47,7 @@ import com.mohdshayan.dutyclock.core.engine.RuleEngine
 import com.mohdshayan.dutyclock.core.engine.text
 import com.mohdshayan.dutyclock.core.model.AbsenceKind
 import com.mohdshayan.dutyclock.core.model.HOUR_MS
+import com.mohdshayan.dutyclock.core.model.MINUTE_MS
 import com.mohdshayan.dutyclock.core.model.WEEK_MS
 import com.mohdshayan.dutyclock.core.time.FixedWeek
 import com.mohdshayan.dutyclock.di.ServiceLocator
@@ -79,6 +80,8 @@ data class WeekDay(
     val reducedRest: Boolean,
     val absence: AbsenceKind?,
     val future: Boolean,
+    /** "From 05:30" or "Until 05:30" on a day only partly in the week. */
+    val part: String? = null,
 )
 
 data class TotalRow(val title: String, val value: String, val detail: String, val over: Boolean, val unknown: Boolean = false)
@@ -93,6 +96,10 @@ sealed interface WeekState {
         val totals: List<TotalRow>,
         val findings: List<String>,
         val hasActivity: Boolean,
+        /** The week on the local clock, when the zone is off UTC at either end of it. */
+        val span: String? = null,
+        /** Driving in the totals that no day shows: brought in from the tachograph. */
+        val broughtIn: Long = 0L,
     ) : WeekState
 }
 
@@ -107,10 +114,11 @@ class WeekViewModel(app: Application) : AndroidViewModel(app) {
         val r = ev.replay
         val ws = FixedWeek.start(now) + off * WEEK_MS
         val monday = Instant.ofEpochMilli(ws).atZone(ZoneOffset.UTC).toLocalDate()
-        val strips = DayTotals.strips(input.entries, monday, monday.plusDays(6), now, zone)
+        // The days are the week the totals count: the UTC week on the local days it touches.
+        val strips = DayTotals.weekStrips(input.entries, ws, now, zone)
         val today = DayTotals.localDate(now, zone)
         val absences = input.absences.associate { it.date to it.kind }
-        val days = strips.map { s ->
+        val days = strips.mapIndexed { i, s ->
             WeekDay(
                 date = s.date,
                 strip = s,
@@ -118,6 +126,11 @@ class WeekViewModel(app: Application) : AndroidViewModel(app) {
                 reducedRest = r.dailyRests.any { it.kind == DailyRestKind.REDUCED && DayTotals.localDate(it.end, zone) == s.date },
                 absence = absences[s.date.toString()],
                 future = s.date.isAfter(today),
+                part = when {
+                    i == 0 && DayTotals.minuteOfDay(ws, zone) != 0 -> "From ${Fmt.clock(ws, zone)}"
+                    i == strips.lastIndex && DayTotals.minuteOfDay(ws + WEEK_MS, zone) != 0 -> "Until ${Fmt.clock(ws + WEEK_MS, zone)}"
+                    else -> null
+                },
             )
         }
         val drive = r.weekDriving[ws] ?: 0L
@@ -147,7 +160,10 @@ class WeekViewModel(app: Application) : AndroidViewModel(app) {
             days = days,
             totals = totals,
             findings = findings,
-            hasActivity = days.any { it.strip.hasActivity || it.absence != null },
+            // Never "no driving" while the totals hold some, such as a week brought in.
+            hasActivity = days.any { it.strip.hasActivity || it.absence != null } || drive > 0 || work > 0,
+            span = DayTotals.weekSpan(ws, zone),
+            broughtIn = (drive - days.sumOf { it.strip.driveMs }).coerceAtLeast(0L),
         ) as WeekState
     }
         .flowOn(Dispatchers.Default)
@@ -197,6 +213,13 @@ private fun WeekContent(s: WeekState.Ready, vm: WeekViewModel, onToday: () -> Un
                 style = MaterialTheme.typography.bodyMedium,
                 color = cs.onSurfaceVariant,
             )
+            if (s.span != null) {
+                Text(
+                    "On your clock: ${s.span}.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = cs.onSurfaceVariant,
+                )
+            }
             Spacer(Modifier.height(8.dp))
             if (!s.hasActivity) {
                 EmptyState(
@@ -211,6 +234,14 @@ private fun WeekContent(s: WeekState.Ready, vm: WeekViewModel, onToday: () -> Un
             for (d in s.days) {
                 DayRow(d, vm)
                 RowDivider()
+            }
+            if (s.broughtIn >= MINUTE_MS) {
+                Text(
+                    "Driving this week includes ${Fmt.hm(s.broughtIn)} brought in from your tachograph, not shown by day.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = cs.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
             }
             SectionTitle("Totals")
             for (t in s.totals) {
@@ -263,6 +294,7 @@ private fun DayRow(d: WeekDay, vm: WeekViewModel) {
             DayStripBar(d.strip.pieces, Modifier.fillMaxWidth())
             Spacer(Modifier.height(4.dp))
             val marks = listOfNotNull(
+                d.part,
                 d.absence?.label,
                 if (d.tenHour) "10-hour day" else null,
                 if (d.reducedRest) "Reduced rest" else null,

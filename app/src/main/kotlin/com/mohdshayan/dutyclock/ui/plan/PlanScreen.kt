@@ -42,7 +42,6 @@ import com.mohdshayan.dutyclock.core.plan.LivePlan
 import com.mohdshayan.dutyclock.core.plan.PlanRequest
 import com.mohdshayan.dutyclock.core.plan.PlanResult
 import com.mohdshayan.dutyclock.core.plan.ShownPlan
-import com.mohdshayan.dutyclock.core.plan.StepKind
 import com.mohdshayan.dutyclock.data.prefs.AppPrefs
 import com.mohdshayan.dutyclock.di.ServiceLocator
 import com.mohdshayan.dutyclock.ui.components.EmptyState
@@ -256,7 +255,7 @@ private fun ResultCard(
             Text("No driving fits before the limit.", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
         }
         for (s in steps) {
-            StepRow(Fmt.clock(s.start, zone), if (s.kind == StepKind.DRIVE) "Drive" else "Break", Fmt.hm(s.length))
+            StepRow(Fmt.clock(s.start, zone), s.kind.label, Fmt.hm(s.length))
             RowDivider()
             t = s.end
         }

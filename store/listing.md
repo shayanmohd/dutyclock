@@ -51,7 +51,7 @@ English interface. Ferry and train crossings, multi-manning, GB domestic passeng
 
 ## Release notes
 <!-- at most 500 characters, shown under What's new. -->
-Two small fixes. On a new Today screen, the hint in the middle of the dial now fits between the hour labels at any screen and text size. The Plan result keeps up with your log: when you tap a new mode, edit an entry or come back to Plan later, the plan is worked out again from your log as it is now, so it never shows an out of date arrival time. Advisory, not a tachograph.
+Two fixes. When a break or rest is nearly done, Plan now checks whether finishing it first gets you home sooner than driving now, and if so its first row says so, for example Finish the break, 0:04. Week now shows the same week its totals count: Monday to Sunday in UTC, as on your tachograph. Outside UTC the days show only their part of that week, the week is also given on your own clock, and it never says no driving while the totals have some. Advisory, not a tachograph.
 
 ## Category
 <!-- one Play category, for example Productivity or Tools. -->

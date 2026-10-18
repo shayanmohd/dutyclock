@@ -66,6 +66,71 @@ class PlannerTest {
         assertEquals("a 45-minute wait is the break", h(3, 40), r.steps.first().length)
     }
 
+    /** 2 h 40 driven since the last full break, the split's 15 minutes taken, then resting from 02:16. */
+    private fun splitUnderWay(restMin: Int): Scenario {
+        val s = Scenario(at("2026-10-16T23:21"))
+        s.rest(48 * 60)
+        s.drive(150).rest(15).drive(10)
+        assertEquals(at("2026-10-19T02:16"), s.end)
+        return s.rest(restMin)
+    }
+
+    @Test
+    fun `a split nearly complete is finished first when that gets home sooner`() {
+        // The S22+ case: at 02:42 the second part is 26 of 30. Driving now meant 1:50, 0:30, 0:50 (arrive 05:52).
+        val s = splitUnderWay(26)
+        assertEquals(at("2026-10-19T02:42"), s.end)
+        val r = HomePlanner.plan(s.input(), s.end, s.end, h(2, 40))
+        r as PlanResult.Fits
+        assertEquals(listOf(StepKind.FINISH_BREAK to m(4), StepKind.DRIVE to h(2, 40)), r.steps.map { it.kind to it.length })
+        assertEquals("Finish the break", r.steps.first().kind.label)
+        assertEquals(s.end, r.steps.first().start)
+        assertEquals(at("2026-10-19T05:26"), r.arrival)
+    }
+
+    @Test
+    fun `finishing first is timed in whole minutes when now has seconds`() {
+        val s = splitUnderWay(26)
+        val now = s.end + 40_000
+        val r = HomePlanner.plan(s.input(), now, now, h(2, 40))
+        r as PlanResult.Fits
+        assertTrue(r.steps.all { it.length % m(1) == 0L })
+        assertEquals(StepKind.FINISH_BREAK to m(4), r.steps.first().kind to r.steps.first().length)
+        assertEquals(now + m(4) + h(2, 40), r.arrival)
+    }
+
+    @Test
+    fun `a break barely started is not finished first when the drive fits without one`() {
+        val s = Scenario(at("2026-10-16T23:21")).rest(48 * 60).drive(160).rest(2)
+        val r = HomePlanner.plan(s.input(), s.end, s.end, h(1, 30))
+        r as PlanResult.Fits
+        assertEquals(listOf(StepKind.DRIVE to h(1, 30)), r.steps.map { it.kind to it.length })
+        assertEquals(s.end + h(1, 30), r.arrival)
+    }
+
+    @Test
+    fun `a daily rest nearly complete is finished first instead of running out of daily driving`() {
+        // 9 hours driven today, then 8 h 50 of rest: driving now continues the same day, with nothing left.
+        val s = Scenario(at("2026-10-12T06:00")).rest(48 * 60)
+        s.drive(270).rest(45).drive(270)
+        s.rest(8 * 60 + 50)
+        val r = HomePlanner.plan(s.input(), s.end, s.end, h(2))
+        r as PlanResult.Fits
+        assertEquals(listOf(StepKind.FINISH_DAILY_REST to m(10), StepKind.DRIVE to h(2)), r.steps.map { it.kind to it.length })
+        assertEquals("Finish the daily rest", r.steps.first().kind.label)
+        assertEquals(s.end + m(10) + h(2), r.arrival)
+    }
+
+    @Test
+    fun `a rest far from complete is not finished first, the planner plans no daily rest`() {
+        val s = Scenario(at("2026-10-12T06:00")).rest(48 * 60)
+        s.drive(270).rest(45).drive(270)
+        s.rest(5 * 60)
+        val r = HomePlanner.plan(s.input(), s.end, s.end, h(2))
+        r as PlanResult.Blocked
+        assertEquals(Blocker.DAILY_DRIVING, r.blocker)
+    }
+
     @Test
     fun `no log means nothing to plan from`() {
         val empty = EngineInput(emptyList(), null, emptyList(), DayChoices(), RuleSet.EU, z)

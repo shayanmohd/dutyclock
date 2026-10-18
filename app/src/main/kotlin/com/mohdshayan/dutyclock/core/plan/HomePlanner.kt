@@ -4,10 +4,18 @@ import com.mohdshayan.dutyclock.core.engine.Fmt
 import com.mohdshayan.dutyclock.core.engine.RuleEngine
 import com.mohdshayan.dutyclock.core.engine.EngineInput
 import com.mohdshayan.dutyclock.core.model.Entry
+import com.mohdshayan.dutyclock.core.model.HOUR_MS
 import com.mohdshayan.dutyclock.core.model.MINUTE_MS
 import com.mohdshayan.dutyclock.core.model.Mode
 
-enum class StepKind { DRIVE, BREAK }
+/** A row of the plan, with the words the Plan screen shows for it. */
+enum class StepKind(val label: String) {
+    DRIVE("Drive"),
+    BREAK("Break"),
+    FINISH_BREAK("Finish the break"),
+    FINISH_DAILY_REST("Finish the daily rest"),
+    FINISH_WEEKLY_REST("Finish the weekly rest"),
+}
 
 data class PlanStep(val kind: StepKind, val start: Long, val end: Long) {
     val length get() = end - start
@@ -54,8 +62,46 @@ private fun Fmt.minutesOrHours(ms: Long): String {
 object HomePlanner {
     private const val SYNTH = -1L
 
+    /** The longest wait the planner finishes a break or rest for: one full break. Longer is a rest it does not plan. */
+    private const val FINISH_WITHIN = 45 * MINUTE_MS
+
     fun plan(input: EngineInput, now: Long, leaveAt: Long, drivingNeeded: Long): PlanResult {
         if (input.entries.isEmpty() && input.seed == null) return PlanResult.NeedsLog
+        val driveNow = planFrom(input, now, leaveAt, drivingNeeded)
+        val finish = finishFirst(input, now, leaveAt, drivingNeeded)
+        return if (finish != null && (driveNow !is PlanResult.Fits || finish.arrival < driveNow.arrival)) finish else driveNow
+    }
+
+    /**
+     * A break or rest under way, finished before driving: the soonest arrival among the instants
+     * it completes, each judged by the rules engine. Null when nothing under way completes soon
+     * enough or when finishing it does not get the drive home.
+     */
+    private fun finishFirst(input: EngineInput, now: Long, leaveAt: Long, drivingNeeded: Long): PlanResult.Fits? {
+        val ev = RuleEngine.evaluate(input, now)
+        val rest = ev.replay.ongoingRest
+        if (ev.mode != Mode.REST || rest == null || !input.ruleSet.isEuFamily) return null
+        val l = ev.limits
+        val from = maxOf(now, leaveAt)
+        val ends = listOfNotNull(
+            ev.breakCompleteAt?.let { it to StepKind.FINISH_BREAK },
+            // A 9-hour daily rest counts as the split's second part or as a reduced rest, while one is left.
+            if (ev.replay.splitFirst || l.reducedRestsLeft > 0) rest.start + 9 * HOUR_MS to StepKind.FINISH_DAILY_REST else null,
+            rest.start + 11 * HOUR_MS to StepKind.FINISH_DAILY_REST,
+            rest.start + l.weeklyRestRequired to StepKind.FINISH_WEEKLY_REST,
+            rest.start + 45 * HOUR_MS to StepKind.FINISH_WEEKLY_REST,
+        )
+        return ends.mapNotNull { (end, kind) ->
+            // Whole minutes from the start of the plan, so the rows add up on the clock.
+            val wait = (end - from + MINUTE_MS - 1) / MINUTE_MS * MINUTE_MS
+            if (end <= from || wait > FINISH_WITHIN) return@mapNotNull null
+            val r = run(input, now, from + wait, drivingNeeded) as? PlanResult.Fits ?: return@mapNotNull null
+            r.copy(steps = listOf(PlanStep(kind, from, from + wait)) + r.steps)
+        }.minByOrNull { it.arrival }
+    }
+
+    /** Driving from [leaveAt], or a 10-hour day or reduced rest offered when one would cover the gap. */
+    private fun planFrom(input: EngineInput, now: Long, leaveAt: Long, drivingNeeded: Long): PlanResult {
         val first = run(input, now, leaveAt, drivingNeeded)
         if (first !is PlanResult.Blocked) return first
         val ev = RuleEngine.evaluate(input, now)
