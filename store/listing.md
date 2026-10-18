@@ -69,7 +69,7 @@ Everyone. No user-generated content is shared, no data is collected, no ads.
 
 ## Privacy policy URL
 <!-- the GitHub Pages URL of docs/privacy-policy.html, live before the console sees it. -->
-https://shayanmohd.github.io/dutyclock/privacy-policy.html
+https://apps.mohdshayan.com/privacy-policies/dutyclock-privacy-policy.html
 
 ## Assets
 - App icon: `store/play-icon-512.png` (512x512)
