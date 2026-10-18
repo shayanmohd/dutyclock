@@ -38,6 +38,7 @@ import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -47,6 +48,14 @@ import com.mohdshayan.dutyclock.ui.theme.LocalDiscColors
 import com.mohdshayan.dutyclock.ui.theme.LocalReducedMotion
 import kotlin.math.cos
 import kotlin.math.sin
+
+/** Where the hour labels sit, in from the rim: past the rim inset, the driving band and a margin. */
+private val LABEL_RADIUS_INSET = 50.dp
+
+/** The inner edge of the driving band, in from the rim. */
+private val BAND_INSET = 38.dp
+
+private data class Clear(val halfWidth: Float, val halfHeight: Float, val radius: Float)
 
 /** What the centre of the disc shows: the most urgent counter. */
 data class DiscCentre(val key: String, val big: String, val small: String, val label: String, val over: Boolean)
@@ -66,6 +75,8 @@ fun DayDisc(
     centre: DiscCentre?,
     modifier: Modifier = Modifier,
     diameter: Dp = 280.dp,
+    /** Shown in the centre when there is no counter yet, wrapped and sized to the inner circle. */
+    hint: String? = null,
 ) {
     val colors = LocalDiscColors.current
     val reduced = LocalReducedMotion.current
@@ -73,8 +84,25 @@ fun DayDisc(
     val labelStyle = MaterialTheme.typography.labelSmall.copy(color = colors.ink)
     val bigStyle = MaterialTheme.typography.displayLarge
     val smallStyle = MaterialTheme.typography.headlineMedium.copy(fontSize = 22.sp)
+    val hintStyle = MaterialTheme.typography.titleMedium.copy(color = colors.ink, textAlign = TextAlign.Center)
+    val density = LocalDensity.current
+    // The clear space inside the hour labels, from where they are drawn and how big they are at
+    // this font scale: half its width (inside 06 and 18), half its height (inside 00 and 12), and
+    // the radius inside the driving band, for the corners of the text.
+    val clear = remember(diameter, density, labelStyle) {
+        with(density) {
+            val lr = diameter.toPx() / 2f - LABEL_RADIUS_INSET.toPx()
+            val label = listOf("00", "06", "12", "18").map { measurer.measure(it, labelStyle).size }
+            val gap = 4.dp.toPx()
+            Clear(
+                halfWidth = lr - label.maxOf { it.width } / 2f - gap,
+                halfHeight = lr - label.maxOf { it.height } / 2f - gap,
+                radius = diameter.toPx() / 2f - BAND_INSET.toPx() - gap,
+            )
+        }
+    }
     // Numerals stay inside the 06 and 18 hour labels.
-    val centreWidthPx = with(LocalDensity.current) { (diameter * 0.5f).toPx() }
+    val centreWidthPx = minOf(with(density) { (diameter * 0.5f).toPx() }, clear.halfWidth * 2f)
 
     // The one first-run moment: the hand settles from midnight to now.
     var settled by rememberSaveable { mutableStateOf(false) }
@@ -140,7 +168,7 @@ fun DayDisc(
                 )
                 if (hr % 6 == 0) {
                     val text = hr.toString().padStart(2, '0')
-                    val lr = r - rimInset - 28.dp.toPx() - 12.dp.toPx()
+                    val lr = r - LABEL_RADIUS_INSET.toPx()
                     val m = measurer.measure(text, labelStyle)
                     drawText(
                         m,
@@ -156,6 +184,27 @@ fun DayDisc(
             rotate(hand.value / 4f, c) {
                 drawLine(colors.live, Offset(c.x, c.y - r + 2.dp.toPx()), Offset(c.x, c.y - r + rimInset + 30.dp.toPx()), strokeWidth = 2.dp.toPx(), cap = StrokeCap.Round)
             }
+        }
+
+        if (centre == null && hint != null) {
+            // Shrink the hint until its wrapped lines fit inside the labels, at any size and font scale.
+            val fit = remember(hint, clear, hintStyle) {
+                val maxWidth = (clear.halfWidth * 2f).toInt().coerceAtLeast(1)
+                var f = 1f
+                while (f > 0.5f) {
+                    val m = measurer.measure(hint, hintStyle.copy(fontSize = hintStyle.fontSize * f), constraints = Constraints(maxWidth = maxWidth))
+                    val hw = (0 until m.lineCount).maxOf { m.getLineRight(it) - m.getLineLeft(it) } / 2f
+                    val hh = m.size.height / 2f
+                    if (!m.didOverflowWidth && hh <= clear.halfHeight && hw * hw + hh * hh <= clear.radius * clear.radius) break
+                    f -= 0.05f
+                }
+                f
+            }
+            Text(
+                hint,
+                style = hintStyle.copy(fontSize = hintStyle.fontSize * fit),
+                modifier = Modifier.widthIn(max = with(density) { (clear.halfWidth * 2f).toDp() }),
+            )
         }
 
         if (centre != null) {
@@ -179,7 +228,7 @@ fun DayDisc(
                     }
                     f
                 }
-                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.widthIn(max = diameter * 0.62f)) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.widthIn(max = minOf(diameter * 0.62f, with(density) { (clear.halfWidth * 2f).toDp() }))) {
                     Row(verticalAlignment = Alignment.Bottom) {
                         Text(cc.big, style = bigStyle.copy(fontSize = bigStyle.fontSize * scale), color = colors.ink, maxLines = 1, softWrap = false)
                         if (cc.small.isNotEmpty()) {

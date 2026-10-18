@@ -51,7 +51,7 @@ English interface. Ferry and train crossings, multi-manning, GB domestic passeng
 
 ## Release notes
 <!-- at most 500 characters, shown under What's new. -->
-Bring your week in now asks what you are doing and since when, so a break already under way counts from its real start. It also takes a shift begun before midnight and a split break's first 15 minutes. Hours and minutes have their own boxes. Dutyclock asks for exact alarms on your first tap; once allowed, alerts sound on time even when the phone is idle. Daily rest and driving show the regular and reduced deadlines together. Limits it cannot know yet say Unknown. Advisory, not a tachograph.
+Two small fixes. On a new Today screen, the hint in the middle of the dial now fits between the hour labels at any screen and text size. The Plan result keeps up with your log: when you tap a new mode, edit an entry or come back to Plan later, the plan is worked out again from your log as it is now, so it never shows an out of date arrival time. Advisory, not a tachograph.
 
 ## Category
 <!-- one Play category, for example Productivity or Tools. -->

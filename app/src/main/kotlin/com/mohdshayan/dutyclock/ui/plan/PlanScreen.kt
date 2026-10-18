@@ -38,8 +38,10 @@ import com.mohdshayan.dutyclock.core.engine.Durations
 import com.mohdshayan.dutyclock.core.engine.Fmt
 import com.mohdshayan.dutyclock.core.engine.RuleEngine
 import com.mohdshayan.dutyclock.core.plan.Blocker
-import com.mohdshayan.dutyclock.core.plan.HomePlanner
+import com.mohdshayan.dutyclock.core.plan.LivePlan
+import com.mohdshayan.dutyclock.core.plan.PlanRequest
 import com.mohdshayan.dutyclock.core.plan.PlanResult
+import com.mohdshayan.dutyclock.core.plan.ShownPlan
 import com.mohdshayan.dutyclock.core.plan.StepKind
 import com.mohdshayan.dutyclock.data.prefs.AppPrefs
 import com.mohdshayan.dutyclock.di.ServiceLocator
@@ -51,13 +53,23 @@ import com.mohdshayan.dutyclock.ui.components.RowDivider
 import com.mohdshayan.dutyclock.ui.components.SecondaryButton
 import com.mohdshayan.dutyclock.ui.components.TimePickDialog
 import com.mohdshayan.dutyclock.ui.theme.RadiusLg
+import com.mohdshayan.dutyclock.ui.today.ticker
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 sealed interface PlanUi {
     data object Idle : PlanUi
@@ -72,7 +84,22 @@ class PlanViewModel(app: Application) : AndroidViewModel(app) {
     val drivingM = MutableStateFlow("")
     val leaveAt = MutableStateFlow<LocalTime?>(null)
     val inputError = MutableStateFlow<String?>(null)
-    val ui = MutableStateFlow<PlanUi>(PlanUi.Idle)
+    private val request = MutableStateFlow<PlanRequest?>(null)
+
+    /**
+     * The shown plan is re-planned from the same request on every change to the log and every
+     * minute, so it never shows a result built on an older log. Coming back after the screen
+     * has been away for a while shows the working state until it is re-planned, not the old result.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val ui: StateFlow<PlanUi> = request.flatMapLatest { r ->
+        if (r == null) flowOf(PlanUi.Idle)
+        else LivePlan.shown(r, repo.input.map { it.first }, ticker(60_000L))
+            .map<ShownPlan, PlanUi> { PlanUi.Done(it.result, it.zone, it.start) }
+            .onStart { emit(PlanUi.Working) }
+            .catch { emit(PlanUi.Failed) }
+            .flowOn(Dispatchers.Default)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000, replayExpirationMillis = 0), PlanUi.Working)
 
     fun plan() {
         val need = Durations.ofParts(drivingH.value, drivingM.value)
@@ -85,23 +112,14 @@ class PlanViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         inputError.value = null
-        ui.value = PlanUi.Working
-        viewModelScope.launch {
-            try {
-                val (input, _) = repo.snapshot()
-                val now = System.currentTimeMillis()
-                val zone = input.zone
-                val leave = leaveAt.value?.let { t ->
-                    val at = LocalDate.now(zone).atTime(t).atZone(zone).toInstant().toEpochMilli()
-                    if (at < now) at + 24 * 3_600_000L else at
-                } ?: now
-                val result = withContext(Dispatchers.Default) { HomePlanner.plan(input, now, leave, need) }
-                ServiceLocator.appPrefs.bump(AppPrefs.Count.PLANNER_RUNS)
-                ui.value = PlanUi.Done(result, zone, maxOf(now, leave))
-            } catch (e: Exception) {
-                ui.value = PlanUi.Failed
-            }
+        val now = System.currentTimeMillis()
+        val zone = ZoneId.systemDefault()
+        val leave = leaveAt.value?.let { t ->
+            val at = LocalDate.now(zone).atTime(t).atZone(zone).toInstant().toEpochMilli()
+            if (at < now) at + 24 * 3_600_000L else at
         }
+        request.value = PlanRequest(need, leave)
+        viewModelScope.launch { ServiceLocator.appPrefs.bump(AppPrefs.Count.PLANNER_RUNS) }
     }
 
     fun applyFix(blocker: Blocker) {

@@ -216,16 +216,8 @@ private fun TodayContent(s: TodayState.Ready, vm: TodayViewModel, onCatchUp: () 
                 nowMin = s.nowMin,
                 centre = centre,
                 diameter = size,
+                hint = if (ev.empty) "Tap the mode you are in now" else null,
             )
-            if (ev.empty) {
-                Text(
-                    "Tap the mode you are in now",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = com.mohdshayan.dutyclock.ui.theme.LocalDiscColors.current.ink,
-                    modifier = Modifier.width(150.dp),
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                )
-            }
         }
     }
 
